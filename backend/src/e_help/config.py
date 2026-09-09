@@ -3,9 +3,15 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+import logging
 
+# logging.basicConfig(
+#     level=logging.info,
+#     format="%(asctime)s %(levelname)s [%s(names)] %(message)s"
+# )
+# logger = logging.getLogger(__name__)
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -21,7 +27,10 @@ class Settings(BaseSettings):
         default_factory=lambda: Path(__file__).resolve().parents[2] / "knowledge.txt"
     )
 
-    milvus_uri: str = Field(default_factory=lambda: "")
+    milvus_uri: str = Field(
+        default_factory=lambda: "",
+        validation_alias=AliasChoices("milvus_uri", "MILVUS_URI", "MILVUS_DB_URL"),
+    )
     milvus_db_name: str = "e_help_db"
     milvus_collection_name: str = "e_help_after_sale"
 
@@ -45,4 +54,8 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    return Settings()
+    s = Settings()
+    print(f"env:{s.model_config["env_file"]}")
+    print(f"milvus:{s.milvus_uri}")
+
+    return s

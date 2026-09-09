@@ -22,7 +22,13 @@ class SearchHit:
 
 class MilvusStore:
     def __init__(self, *, uri: str, db_name: str, collection_name: str, dimension: int) -> None:
-        self.uri = uri or "http://127.0.0.1:19530"
+
+        print("qg-uri:", uri);
+        if not uri:
+            raise ValueError(
+                "Milvus 连接地址未配置：请在 backend/.env 中设置 MILVUS_URI（例如 http://host:19530）"
+            )
+        self.uri = uri
         self.db_name = db_name
         self.collection_name = collection_name
         self.dimension = dimension
