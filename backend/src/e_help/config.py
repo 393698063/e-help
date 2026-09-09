@@ -1,0 +1,48 @@
+from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=Path(__file__).resolve().parents[2] / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    app_name: str = "e-help"
+    backend_host: str = "0.0.0.0"
+    backend_port: int = 8000
+    knowledge_path: Path = Field(
+        default_factory=lambda: Path(__file__).resolve().parents[2] / "knowledge.txt"
+    )
+
+    milvus_uri: str = Field(default_factory=lambda: "")
+    milvus_db_name: str = "e_help_db"
+    milvus_collection_name: str = "e_help_after_sale"
+
+    close_api_key: str | None = None
+    close_api_base_url: str | None = None
+    closeai_base_url: str | None = None
+
+    embed_model: str = "text-embedding-3-small"
+    chat_model: str = "gpt-5.4-mini"
+    embedding_dimension: int = 1536
+    chunk_size: int = 400
+    chunk_overlap: int = 80
+    top_k: int = 5
+
+    def resolved_embedding_base_url(self) -> str | None:
+        return self.close_api_base_url or self.closeai_base_url
+
+    def resolved_chat_base_url(self) -> str | None:
+        return self.closeai_base_url or self.close_api_base_url
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    return Settings()

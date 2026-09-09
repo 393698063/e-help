@@ -1,2 +1,1 @@
-def main() -> None:
-    print("Hello from e-help!")
+from .e_help.cli import main
