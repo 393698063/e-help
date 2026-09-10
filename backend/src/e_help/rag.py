@@ -102,6 +102,7 @@ class RAGService:
     def refresh_index(self) -> int:
         try:
             count = self.reindex()
+            print("qg-index-count:", count)
             self.index_ready = True
             self.index_error = None
             return count
@@ -112,6 +113,7 @@ class RAGService:
             return 0
 
     def reindex(self) -> int:
+        print("=====================开始向量数据处理=========================")
         document = load_document(self.settings.knowledge_path)
         chunks = split_document(
             document,
@@ -122,10 +124,13 @@ class RAGService:
         self.store.ensure_collection()
         self.store.set_embeddings(self.embeddings)
         self.store.upsert_chunks(chunks)
+        print(f"完成了{len(chunks)}条向量数据的保存")
+        print("=====================开始向量数据处理完毕=========================")
         return len(chunks)
 
     def search(self, query: str) -> list[RetrievedChunk]:
         try:
+            print(f"用户的问题：{query}")
             hits = self.store.search(query, embeddings=self.embeddings, top_k=self.settings.top_k)
         except Exception as exc:  # noqa: BLE001
             self.index_ready = False
@@ -150,6 +155,7 @@ class RAGService:
         thread.messages.append(ChatMessage(role="user", content=message))
         retrieved_chunks = self.search(message)
         if not retrieved_chunks:
+            print(f"answer: 没有找到答案")
             answer_text = "我不知道"
             thread.messages.append(ChatMessage(role="assistant", content=answer_text))
             return RAGResult(answer=answer_text, retrieved_chunks=retrieved_chunks)

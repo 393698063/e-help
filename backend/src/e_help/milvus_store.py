@@ -184,9 +184,11 @@ class MilvusStore:
                     score=float(hit["distance"]),
                 )
             )
+        print(f"检索召回的内容{hits}")
         return hits
 
     def _embed_texts(self, texts: list[str]) -> list[list[float]]:
+        """生成向量"""
         if self._embeddings is None:
             raise RuntimeError("Embedding function not attached")
         return self._embeddings.embed_documents(texts)

@@ -55,10 +55,11 @@ def split_document(
     chunk_size: int,
     chunk_overlap: int,
 ) -> list[KnowledgeChunk]:
+    """文档切片"""
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
-        separators=["\n\n", "\n", "。", "，", "；"],
+        separators=["\n\n", "\n", "；", "。", "，", ""],
         keep_separator=True,
         strip_whitespace=True,
     )
