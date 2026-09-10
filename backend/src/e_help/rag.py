@@ -11,6 +11,7 @@ from openai import APIConnectionError
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
+from starlette.concurrency import run_in_threadpool
 
 from .config import Settings
 from .knowledge import load_document, split_document
@@ -203,8 +204,10 @@ class RAGService:
             )
         return str(exc) or exc.__class__.__name__
 
-    def stream_answer(self, thread_id: str | None, message: str):
-        result = self.answer(thread_id, message)
+    async def stream_answer(self, thread_id: str | None, message: str):
+        # embedding、Milvus 和同步 LLM 调用都在工作线程执行，避免阻塞
+        # FastAPI 的事件循环。
+        result = await run_in_threadpool(self.answer, thread_id, message)
         yield {
             "event": "retrieval.completed",
             "data": {

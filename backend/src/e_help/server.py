@@ -9,6 +9,7 @@ from typing import AsyncGenerator
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 from .config import get_settings
 from .models import ChatRequest, ReindexResponse, ThreadCreateResponse
@@ -68,7 +69,7 @@ async def create_thread():
 @app.post("/api/knowledge/reindex", response_model=ReindexResponse)
 async def reindex():
     rag = get_service()
-    count = rag.refresh_index()
+    count = await run_in_threadpool(rag.refresh_index)
     if rag.index_ready:
         return ReindexResponse(status="ok", document_id="knowledge", chunks_indexed=count)
     return ReindexResponse(status=f"degraded: {rag.index_error}", document_id="knowledge", chunks_indexed=count)
@@ -87,7 +88,7 @@ async def chat_stream(request: Request, payload: ChatRequest):
         else:
             thread_id = payload.thread_id
         try:
-            for event in rag.stream_answer(thread_id, payload.message):
+            async for event in rag.stream_answer(thread_id, payload.message):
                 yield _sse_event(event["event"], event["data"])
         except Exception as exc:  # noqa: BLE001
             yield _sse_event("error", {"message": str(exc)})
