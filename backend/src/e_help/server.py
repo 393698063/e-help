@@ -9,7 +9,6 @@ from typing import AsyncGenerator
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from starlette.concurrency import run_in_threadpool
 
 from .config import get_settings
 from .models import ChatRequest, ReindexResponse, ThreadCreateResponse
@@ -49,7 +48,7 @@ def get_service() -> RAGService:
         raise RuntimeError("service not initialized")
     return service
 
-
+# 健康检查api
 @app.get("/api/health")
 async def health():
     rag = get_service()
@@ -59,27 +58,34 @@ async def health():
         "index_error": rag.index_error,
     }
 
-
+# 创建thread
 @app.post("/api/threads", response_model=ThreadCreateResponse)
 async def create_thread():
     thread = get_service().create_thread()
     return ThreadCreateResponse(thread_id=thread.thread_id, created_at=thread.created_at)
 
-
+# 重建索引
 @app.post("/api/knowledge/reindex", response_model=ReindexResponse)
 async def reindex():
     rag = get_service()
-    count = await run_in_threadpool(rag.refresh_index)
+    count = rag.refresh_index()
     if rag.index_ready:
         return ReindexResponse(status="ok", document_id="knowledge", chunks_indexed=count)
     return ReindexResponse(status=f"degraded: {rag.index_error}", document_id="knowledge", chunks_indexed=count)
 
 
+# SSE 并不是 FastAPI 单独“建立一条特殊连接”的 API。
+
+# 本质上是：客户端发起一个普通 HTTP 请求 → FastAPI 不立即返回完整响应 
+# → StreamingResponse 持续向这个 HTTP Response 写数据 → 浏览器持续收到数据
 @app.post("/api/chat/stream")
 async def chat_stream(request: Request, payload: ChatRequest):
-    del request
-    rag = get_service()
 
+    # 通常是因为这个函数虽然需要接收 request 参数，但函数内部实际上不使用它
+    del request # 删除当前作用域中 request 这个变量名的绑定
+    rag = get_service()
+    # 要在 FastAPI 中流式传输 SSE，
+    # 在你的路径操作函数中使用 yield，并设置 response_class=EventSourceResponse
     async def event_generator():
         if not payload.thread_id:
             thread = rag.create_thread()
@@ -88,11 +94,13 @@ async def chat_stream(request: Request, payload: ChatRequest):
         else:
             thread_id = payload.thread_id
         try:
-            async for event in rag.stream_answer(thread_id, payload.message):
+            for event in rag.stream_answer(thread_id, payload.message):
                 yield _sse_event(event["event"], event["data"])
         except Exception as exc:  # noqa: BLE001
             yield _sse_event("error", {"message": str(exc)})
-
+            
+    # media_type="text/event-stream" 告诉客户端：
+    #这是一个 SSE 流，不是普通 JSON Response。
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
