@@ -8,7 +8,7 @@ from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
-load_dotenv(ENV_FILE)
+load_dotenv(ENV_FILE, override=True)
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(

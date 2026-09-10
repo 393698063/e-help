@@ -214,10 +214,14 @@ class RAGService:
                 "chunks": [chunk.model_dump() for chunk in result.retrieved_chunks],
             },
         }
+
+        # 这会向前端发送模型最终回答：
         yield {
             "event": "message.delta",
             "data": {"content": result.answer},
         }
+
+        # 推送回答结束事件：
         yield {
             "event": "message.final",
             "data": {
