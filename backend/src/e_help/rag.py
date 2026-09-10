@@ -40,6 +40,15 @@ class RAGService:
         self.index_ready = False
         self.index_error: str | None = None
         self.lock = Lock()
+        api_key = settings.close_api_key
+        masked_api_key = (
+            f"{api_key[:4]}...{api_key[-4:]}"
+            if api_key and len(api_key) > 8
+            else "<missing>"
+        )
+        logging.getLogger(__name__).warning(
+            "CLOSE_API_KEY loaded: %s", masked_api_key
+        )
         # 初始化向量模型
         self.embeddings = init_embeddings(
             model=settings.embed_model,
@@ -76,7 +85,9 @@ class RAGService:
         )
         self.store.set_embeddings(self.embeddings)
         self.store.ensure_collection()
-        self.refresh_index()
+        # 启动时只连接并加载已有 collection，不自动重建知识库。
+        # 管理员通过 /api/knowledge/reindex 手动触发重建。
+        self.index_ready = True
 
     def create_thread(self) -> ThreadState:
         thread = ThreadState(thread_id=str(uuid4()), created_at=datetime.utcnow())
