@@ -75,10 +75,12 @@ export default function ChatApp() {
 
     while (true) {
       const { value, done } = await reader.read();
+      console.log("接收到SSE事件: ", value, "done:", done)
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
 
       const events = buffer.split("\n\n");
+      console.log("事件: ", events);
       buffer = events.pop() ?? "";
 
       for (const rawEvent of events) {

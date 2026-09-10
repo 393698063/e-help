@@ -26,11 +26,10 @@ class RetrievedChunk(BaseModel):
 
 class ChatRequest(BaseModel):
     thread_id: str | None = None
-    message: str
+    message: str = Field(min_length=1, max_length=10000)
 
 
 class ReindexResponse(BaseModel):
     status: str
     document_id: str
     chunks_indexed: int
-

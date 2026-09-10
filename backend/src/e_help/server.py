@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
-#函数“asynccontextmanager”已弃用
-#   Annotating the return type as `-> AsyncIterator[Foo]` with `@asynccontextmanager` is deprecated. Use `-> AsyncGenerator[Foo]` instead.Pylance
 from contextlib import asynccontextmanager
+from contextlib import suppress
+from time import monotonic
 from typing import AsyncGenerator
 
 from fastapi import FastAPI, Request
@@ -23,11 +24,11 @@ service: RAGService | None = None
 
 # @asynccontextmanager 异步上下文管理器，它将函数转化为所谓的“异步上下文管理器
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]: # 生命周期函数，在服务器启动和关闭时执行
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global service
     settings = get_settings()
     service = RAGService(settings)
-    app.state.service = service         #FastAPI 的 app.state 是一个全局状态容器，可以挂任意对象。把 service 挂上去之后，路由函数里可以通过 request.app.state.service 访问到它
+    app.state.service = service
     yield
 
 
@@ -80,28 +81,71 @@ async def reindex():
 # → StreamingResponse 持续向这个 HTTP Response 写数据 → 浏览器持续收到数据
 @app.post("/api/chat/stream")
 async def chat_stream(request: Request, payload: ChatRequest):
-
-    # 通常是因为这个函数虽然需要接收 request 参数，但函数内部实际上不使用它
-    del request # 删除当前作用域中 request 这个变量名的绑定
     rag = get_service()
-    # 要在 FastAPI 中流式传输 SSE，
-    # 在你的路径操作函数中使用 yield，并设置 response_class=EventSourceResponse
+
     async def event_generator():
+        if await request.is_disconnected():
+            return
+
         if not payload.thread_id:
             thread = rag.create_thread()
             yield _sse_event("thread.created", {"thread_id": thread.thread_id})
             thread_id = thread.thread_id
         else:
             thread_id = payload.thread_id
+
+        stream = rag.stream_answer(thread_id, payload.message)
+        next_event: asyncio.Task | None = None
+        last_ping = monotonic()
         try:
-            for event in rag.stream_answer(thread_id, payload.message):
+            while True:
+                if await request.is_disconnected():
+                    return
+
+                if next_event is None:
+                    next_event = asyncio.create_task(stream.__anext__())
+
+                done, _ = await asyncio.wait({next_event}, timeout=1.0)
+                if not done:
+                    if await request.is_disconnected():
+                        next_event.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await next_event
+                        return
+                    if monotonic() - last_ping >= 15:
+                        yield ": ping\n\n"
+                        last_ping = monotonic()
+                    continue
+
+                try:
+                    event = next_event.result()
+                except StopAsyncIteration:
+                    break
+                finally:
+                    next_event = None
+
                 yield _sse_event(event["event"], event["data"])
+                if await request.is_disconnected():
+                    return
         except Exception as exc:  # noqa: BLE001
-            yield _sse_event("error", {"message": str(exc)})
-            
-    # media_type="text/event-stream" 告诉客户端：
-    #这是一个 SSE 流，不是普通 JSON Response。
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+            if not await request.is_disconnected():
+                yield _sse_event("error", {"message": str(exc)})
+        finally:
+            if next_event is not None and not next_event.done():
+                next_event.cancel()
+                with suppress(asyncio.CancelledError):
+                    await next_event
+            await stream.aclose()
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 def _sse_event(event: str, data: dict) -> str:
