@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     chunk_size: int = 400
     chunk_overlap: int = 80
     top_k: int = 5
+    intent_confidence_threshold: float = 0.65
+    rewrite_history_turns: int = 6
 
     def resolved_embedding_base_url(self) -> str | None:
         return self.close_api_base_url or self.closeai_base_url
@@ -48,11 +50,10 @@ class Settings(BaseSettings):
     def resolved_chat_base_url(self) -> str | None:
         return self.closeai_base_url or self.close_api_base_url
 
+    def resolved_milvus_uri(self) -> str:
+        return self.milvus_uri or ""
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    s = Settings()
-    print(f"env:{s.model_config["env_file"]}")
-    print(f"milvus:{s.milvus_uri}")
-
-    return s
+    return Settings()

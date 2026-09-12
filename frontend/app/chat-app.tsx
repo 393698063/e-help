@@ -28,6 +28,14 @@ export default function ChatApp() {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, draftAssistant]);
 
+
+// const eventSource = new EventSource("/api/events");
+// delta 增量
+// eventSource.addEventListener("message.delta", (event) => {
+//   const data = JSON.parse(event.data);
+//   console.log(data);
+// });
+
   async function createThread() {
     setError("");
     setStatus("正在新建对话");
@@ -74,6 +82,15 @@ export default function ChatApp() {
     let assistantText = "";
 
     while (true) {
+      /**
+       * done: true 不是后端发送的 SSE 字段，也不是通过 parseSSE() 解析出来的，
+       * 而是浏览器的 ReadableStreamDefaultReader.read() 返回的状态。
+       * reader.read() 每次返回一个 Promise，结果大致是：
+      *     {
+              value: Uint8Array | undefined,
+              done: boolean           # false 表示还有数据未读完
+            }
+       */
       const { value, done } = await reader.read();
       console.log("接收到SSE事件: ", value, "done:", done)
       if (done) break;

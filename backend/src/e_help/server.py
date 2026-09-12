@@ -10,6 +10,7 @@ from typing import AsyncGenerator
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 from .config import get_settings
 from .models import ChatRequest, ReindexResponse, ThreadCreateResponse
@@ -69,7 +70,7 @@ async def create_thread():
 @app.post("/api/knowledge/reindex", response_model=ReindexResponse)
 async def reindex():
     rag = get_service()
-    count = rag.refresh_index()
+    count = await run_in_threadpool(rag.refresh_index)
     if rag.index_ready:
         return ReindexResponse(status="ok", document_id="knowledge", chunks_indexed=count)
     return ReindexResponse(status=f"degraded: {rag.index_error}", document_id="knowledge", chunks_indexed=count)
@@ -80,7 +81,7 @@ async def reindex():
 # 本质上是：客户端发起一个普通 HTTP 请求 → FastAPI 不立即返回完整响应 
 # → StreamingResponse 持续向这个 HTTP Response 写数据 → 浏览器持续收到数据
 @app.post("/api/chat/stream")
-async def chat_stream(request: Request, payload: ChatRequest):
+async def chat_stream(request: Request, payload: ChatRequest): # ChatRequest接受用户的输入，去掉首尾空白字符
     rag = get_service()
 
     async def event_generator():
@@ -94,8 +95,11 @@ async def chat_stream(request: Request, payload: ChatRequest):
         else:
             thread_id = payload.thread_id
 
+        # 这一行只是获取异步生成器对象，还没有真正执行 stream_answer() 内部的代码，所以这里不需要 async for
         stream = rag.stream_answer(thread_id, payload.message)
+
         next_event: asyncio.Task | None = None
+        # time 模块提供的一个单调递增计时器，它返回的是一个表示“程序运行后经过了多久”的时间值
         last_ping = monotonic()
         try:
             while True:
@@ -103,20 +107,33 @@ async def chat_stream(request: Request, payload: ChatRequest):
                     return
 
                 if next_event is None:
+                    # 从异步生成器 stream 中异步获取下一个事件，并把这个读取操作放到一个独立的 asyncio 任务中执行
                     next_event = asyncio.create_task(stream.__anext__())
 
+                # 最多等待 1 秒，检查这个任务是否完成。
                 done, _ = await asyncio.wait({next_event}, timeout=1.0)
-                if not done:
-                    if await request.is_disconnected():
-                        next_event.cancel()
-                        with suppress(asyncio.CancelledError):
+                if not done: # 如果任务还没完成，继续循环
+                    if await request.is_disconnected():   # 如果客户端已经断开连接
+                        next_event.cancel()    # 取消这个任务，防止它继续执行
+
+                        # try:
+                        #     some_operation()
+                        # except SomeException:
+                        #     pass           
+                        # 等待任务结束；
+                        # 如果它因为取消而抛出 CancelledError，
+                        # 这是预期行为，忽略它即可。
+                        with suppress(asyncio.CancelledError): # 在指定代码块中，如果发生指定类型的异常，就忽略这个异常，不让它继续向外抛出。
                             await next_event
                         return
+                    # 每隔 15 秒发送一个 ping 事件，保持连接不被关闭
                     if monotonic() - last_ping >= 15:
                         yield ": ping\n\n"
                         last_ping = monotonic()
                     continue
 
+
+                # 如果任务已经完成，获取它的结果
                 try:
                     event = next_event.result()
                 except StopAsyncIteration:
@@ -137,6 +154,9 @@ async def chat_stream(request: Request, payload: ChatRequest):
                     await next_event
             await stream.aclose()
 
+    # StreamingResponse 持续向这个 HTTP Response 写数据，StreamingResponse 
+    # 本身只是让 FastAPI 可以边生成边发送数据，
+    # 它不会自动保持连接永久打开。连接什么时候结束，取决于传入的生成器什么时候结束
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",

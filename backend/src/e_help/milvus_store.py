@@ -22,8 +22,6 @@ class SearchHit:
 
 class MilvusStore:
     def __init__(self, *, uri: str, db_name: str, collection_name: str, dimension: int) -> None:
-
-        print("qg-uri:", uri);
         if not uri:
             raise ValueError(
                 "Milvus 连接地址未配置：请在 backend/.env 中设置 MILVUS_URI（例如 http://host:19530）"
@@ -184,7 +182,6 @@ class MilvusStore:
                     score=float(hit["distance"]),
                 )
             )
-        print(f"检索召回的内容{hits}")
         return hits
 
     def _embed_texts(self, texts: list[str]) -> list[list[float]]:
