@@ -111,7 +111,7 @@ class RAGService:
             "normalized_query": normalized,                                     # 规范化后的问题
             "contextualized_query": normalized,                                 #
             "intent": intent.intent,                                            # 意图
-            "entities": intent.entities,                                        #
+            "entities": intent.entities.model_dump(exclude_none=True),          #
             "need_retrieval": intent.need_retrieval,                            #
             "safety_status": safety.status,                                     #
             "safety_reason": safety.reason,                                     # 

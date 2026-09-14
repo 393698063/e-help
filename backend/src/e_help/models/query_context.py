@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal, TypedDict
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 IntentType = Literal["chitchat", "rag", "tool"]
 SafetyStatus = Literal["allow", "block"]
@@ -29,9 +29,21 @@ class SafetyResult(BaseModel):
     reason: str
 
 
+class IntentEntities(BaseModel):
+    """实体分类固定，避免结构化输出生成任意键的 JSON 对象。"""
+
+    model_config = ConfigDict(extra="forbid") #表示如果模型返回未声明的字段，就拒绝这个对象
+
+    product: str | None = None
+    package: str | None = None
+    topic: str | None = None
+    time: str | None = None
+    value: str | None = None
+
+
 class IntentResult(BaseModel):
     intent: IntentType
-    entities: dict[str, Any] = Field(default_factory=dict)
+    entities: IntentEntities = Field(default_factory=IntentEntities) # entities: dict[str, Any] = Field(default_factory=dict) ntities: dict[str, Any] 这种任意字典结构无法满足严格 JSON Schema 要求。
     need_retrieval: bool
     confidence: float = Field(ge=0, le=1)                   # 置信度、确信分数
     reason: str
