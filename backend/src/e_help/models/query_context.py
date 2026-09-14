@@ -93,6 +93,7 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     thread_id: str | None = None
+    user_id: str | None = None
     message: str = Field(min_length=1, max_length=10000)
 
     #这几行是 Pydantic 的字段校验器，作用是：在创建 ChatRequest 对象时，专门校验 message 字段。Pydantic 会在创建模型时自动调用它：

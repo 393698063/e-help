@@ -12,8 +12,22 @@ type SSEEvent = {
   data: Record<string, unknown>;
 };
 
+const USER_ID_STORAGE_KEY = "e-help:user-id";
+
+function getOrCreateUserId(): string {
+  if (typeof localStorage === "undefined") return "";
+
+  const existing = localStorage.getItem(USER_ID_STORAGE_KEY);
+  if (existing) return existing;
+
+  const generated = crypto.randomUUID();
+  localStorage.setItem(USER_ID_STORAGE_KEY, generated);
+  return generated;
+}
+
 export default function ChatApp() {
   const [threadId, setThreadId] = useState<string>("");
+  const [userId] = useState<string>(() => getOrCreateUserId());
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [isSending, setIsSending] = useState(false);
@@ -59,6 +73,7 @@ export default function ChatApp() {
     let currentThreadId = threadId;
     const payload = {
       thread_id: currentThreadId || null,
+      user_id: userId || null,
       message: text,
     };
 
