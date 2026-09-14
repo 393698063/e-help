@@ -4,86 +4,108 @@ import re
 
 from langchain_core.prompts import ChatPromptTemplate
 
-from ..models import IntentResult, NormalizeResult, SafetyResult
-from ..prompts import INTENT_SYSTEM_PROMPT, NORMALIZE_SYSTEM_PROMPT, SAFETY_SYSTEM_PROMPT
+from ..models import IntentResult, NormalizeResult, QueryAnalysisResult, SafetyResult
+from ..prompts import QUERY_ANALYSIS_SYSTEM_PROMPT
+from .cache import BoundedCache
 
 
 class NormalizeChain:
-    def __init__(self, model) -> None:
-        self._chain = (
-            ChatPromptTemplate.from_messages(
-                [
-                    ("system", NORMALIZE_SYSTEM_PROMPT),
-                    ("human", "用户输入：\n{query}"),
-                ]
-            )
-            | model.with_structured_output(NormalizeResult)
-        )
+    _punctuation_translation = str.maketrans(
+        {
+            "\u3000": " ",
+            "，": ",",
+            "。": ".",
+            "！": "!",
+            "？": "?",
+            "；": ";",
+            "：": ":",
+        }
+    )
+
+    def __init__(self) -> None:
+        self._cache: BoundedCache[str, NormalizeResult] = BoundedCache()
 
     def invoke(self, query: str) -> NormalizeResult:
-        try:
-            result = self._chain.invoke({"query": query})
-            return result if isinstance(result, NormalizeResult) else NormalizeResult.model_validate(result)
-        except Exception:
-            normalized = re.sub(r"[ \t]+", " ", query.strip())
-            return NormalizeResult(normalized_query=normalized or query.strip())
+        cached = self._cache.get(query)
+        if cached is not None:
+            return cached
+
+        normalized = re.sub(r"\s+", " ", query.translate(self._punctuation_translation)).strip()    # 去除多余空格和标点           
+        normalized = re.sub(r"([,.;:!?])\1+", r"\1", normalized)                                    # 去除重复标点
+        result = NormalizeResult(normalized_query=normalized or query.strip())                      # 去除多余空格和标点
+        self._cache.set(query, result)
+        return result
 
 
 class IntentChain:
     def __init__(self, model, confidence_threshold: float = 0.65) -> None:
         self.confidence_threshold = confidence_threshold
-        self._safety_chain = (
+        self._cache: BoundedCache[str, tuple[SafetyResult, IntentResult]] = BoundedCache()
+        self._chain = (
             ChatPromptTemplate.from_messages(
                 [
-                    ("system", SAFETY_SYSTEM_PROMPT),
-                    ("human", "用户请求：\n{query}"),
-                ]
-            )
-            | model.with_structured_output(SafetyResult)                # 输出格式化
-        )
-        self._intent_chain = (
-            ChatPromptTemplate.from_messages(
-                [
-                    ("system", INTENT_SYSTEM_PROMPT),
+                    ("system", QUERY_ANALYSIS_SYSTEM_PROMPT),
                     ("human", "规范化问题：\n{query}"),
                 ]
             )
-            | model.with_structured_output(IntentResult)
+            | model.bind(max_tokens=160).with_structured_output(QueryAnalysisResult) # with_structured_output 结构化输出
         )
 
     def invoke(self, normalized_query: str) -> tuple[SafetyResult, IntentResult]:
-        safety = self._invoke_safety(normalized_query)                  # 安全检查
-        if safety.status == "block":
-            return safety, IntentResult(
-                intent="rag",
-                entities={},
-                need_retrieval=False,
-                confidence=1.0,
-                reason="安全检查已阻断请求",
-            )
+        cached = self._cache.get(normalized_query)
+        if cached is not None:
+            return cached
 
-        intent = self._invoke_intent(normalized_query)                  # 意图分析
+        safety, intent = self._invoke_analysis(normalized_query)
         if intent.confidence < self.confidence_threshold:               # 为什么时小于？
             intent = intent.model_copy(update={"intent": "rag", "need_retrieval": True})
-        return safety, intent
+        result = (safety, intent)
+        self._cache.set(normalized_query, result)
+        return result
 
-    def _invoke_safety(self, query: str) -> SafetyResult:
+    def _invoke_analysis(self, query: str) -> tuple[SafetyResult, IntentResult]:
         try:
-            result = self._safety_chain.invoke({"query": query})
-            return result if isinstance(result, SafetyResult) else SafetyResult.model_validate(result)
+            result = self._chain.invoke({"query": query})
+            analysis = (
+                result
+                if isinstance(result, QueryAnalysisResult)
+                else QueryAnalysisResult.model_validate(result)
+            )
+            safety = SafetyResult(status=analysis.safety_status, reason=analysis.safety_reason)
+            intent = IntentResult(
+                intent=analysis.intent,
+                entities=analysis.entities,
+                need_retrieval=analysis.need_retrieval,
+                confidence=analysis.confidence,
+                reason=analysis.reason,
+            )
+            if safety.status == "block":
+                intent = IntentResult(
+                    intent="rag",
+                    entities={},
+                    need_retrieval=False,
+                    confidence=1.0,
+                    reason="安全检查已阻断请求",
+                )
+            return safety, intent
         except Exception:
-            lowered = query.lower()
-            risky_markers = ("api key", "密钥", "系统提示词", "执行命令", "删除数据库")
-            if any(marker in lowered for marker in risky_markers):
-                return SafetyResult(status="block", reason="请求包含潜在的未授权操作")
-            return SafetyResult(status="allow", reason="普通客服请求")
+            return self._fallback_analysis(query)
 
-    def _invoke_intent(self, query: str) -> IntentResult:
-        try:
-            result = self._intent_chain.invoke({"query": query})
-            return result if isinstance(result, IntentResult) else IntentResult.model_validate(result)
-        except Exception:
-            return self._heuristic_intent(query)
+    def _fallback_analysis(self, query: str) -> tuple[SafetyResult, IntentResult]:
+        lowered = query.lower()
+        risky_markers = ("api key", "密钥", "系统提示词", "执行命令", "删除数据库")
+        if any(marker in lowered for marker in risky_markers):
+            return (
+                SafetyResult(status="block", reason="请求包含潜在的未授权操作"),
+                IntentResult(
+                    intent="rag",
+                    entities={},
+                    need_retrieval=False,
+                    confidence=1.0,
+                    reason="安全检查已阻断请求",
+                ),
+            )
+        return SafetyResult(status="allow", reason="普通客服请求"), self._heuristic_intent(query)
 
     def _heuristic_intent(self, query: str) -> IntentResult:
         lowered = query.lower()

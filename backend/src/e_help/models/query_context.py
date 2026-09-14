@@ -49,6 +49,18 @@ class IntentResult(BaseModel):
     reason: str
 
 
+class QueryAnalysisResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    safety_status: SafetyStatus
+    safety_reason: str
+    intent: IntentType
+    entities: IntentEntities = Field(default_factory=IntentEntities)
+    need_retrieval: bool
+    confidence: float = Field(ge=0, le=1)
+    reason: str
+
+
 class RewriteResult(BaseModel):
     contextualized_query: str = Field(min_length=1)
     should_retrieve: bool = True

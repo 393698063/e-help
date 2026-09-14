@@ -61,7 +61,7 @@ class RAGService:
             base_url=settings.resolved_chat_base_url(),
         )
 
-        self.normalize_chain = NormalizeChain(self.chat_model)
+        self.normalize_chain = NormalizeChain()
         self.intent_chain = IntentChain(
             self.chat_model,
             confidence_threshold=settings.intent_confidence_threshold,
