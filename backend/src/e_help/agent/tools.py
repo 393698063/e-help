@@ -26,16 +26,30 @@ def build_tools(
     trace: AgentToolTrace,
     recall_memory,
 ):
-    @tool
+    @tool(parse_docstring=True)
     def normalize_query(query: str) -> str:
-        """规范化用户输入的空格、换行和标点，不改变语义。"""
+        """规范化用户输入的空格、换行和标点，不改变语义。
+
+        Args:
+            query: 待规范化的用户原始输入。
+
+        Returns:
+            规范化后的用户输入。
+        """
         normalized = normalize_chain.invoke(query).normalized_query
         trace.normalized_query = normalized
         return normalized
 
-    @tool
+    @tool(parse_docstring=True)
     def analyze_query(normalized_query: str) -> dict[str, Any]:
-        """对规范化后的问题做安全检查和意图识别。"""
+        """对规范化后的问题进行安全检查和意图识别。
+
+        Args:
+            normalized_query: 已规范化的用户问题。
+
+        Returns:
+            包含安全状态、用户意图、提取实体、是否需要检索和置信度的分析结果。
+        """
         safety, intent = intent_chain.invoke(normalized_query)
         trace.intent = intent
         trace.query_context = {
@@ -57,10 +71,19 @@ def build_tools(
             "confidence": intent.confidence,
             "reason": intent.reason,
         }
-
-    @tool
+    # TODO: rewrite 是否可以不调用模型
+    @tool(parse_docstring=True)
     def rewrite_query(normalized_query: str, recent_messages: list[dict[str, str]]) -> dict[str, Any]:
-        """结合最近对话把问题改写成可独立检索的问题。"""
+        """结合最近对话把问题改写成可独立检索的问题。
+
+        Args:
+            normalized_query: 已规范化的当前用户问题。
+            recent_messages: 最近的对话消息列表。每条消息应包含 ``role`` 和
+                ``content`` 字段。
+
+        Returns:
+            包含独立检索问题和是否应执行检索的改写结果。
+        """
         history = [
             ChatMessage(role=message["role"], content=message["content"])
             for message in recent_messages
@@ -75,9 +98,18 @@ def build_tools(
             "should_retrieve": rewrite.should_retrieve,
         }
 
-    @tool
+    @tool(parse_docstring=True)
     def retrieve_knowledge(query: str) -> list[dict[str, Any]]:
-        """从 Milvus 知识库检索与问题相关的片段，仅用于电商售后知识问答。"""
+        """从 Milvus 知识库检索与问题相关的片段。
+
+        该工具仅用于电商售后知识问答。
+
+        Args:
+            query: 用于检索知识库的用户问题。
+
+        Returns:
+            与问题相关的知识片段列表。每个片段均为可序列化的字典。
+        """
         if rag_chain is None:
             trace.retrieved_context = RetrievedContext(chunks=[], query=query)
             return []
@@ -85,9 +117,15 @@ def build_tools(
         trace.retrieved_context = retrieved
         return [chunk.model_dump() for chunk in retrieved.chunks]
 
-    @tool
+    @tool(parse_docstring=True)
     async def recall_user_memory() -> list[dict[str, Any]]:
-        """查询该用户已确认的长期偏好，仅用于个性化表达，不能作为知识库事实。"""
+        """查询该用户已确认的长期偏好。
+
+        记忆仅用于个性化表达，不能作为知识库事实。
+
+        Returns:
+            该用户已确认的长期记忆列表。
+        """
         memories = await recall_memory()
         trace.recalled_memories = memories
         return memories

@@ -150,10 +150,10 @@ class RAGService:
         user_id: str | None = None,
     ) -> RAGResult:
         thread = self.get_or_create_thread(thread_id)                       # 获取对话的id
-        trace = AgentToolTrace()
+        trace = AgentToolTrace()                                            # 追踪工具使用情况
 
-        async def recall_user_memory() -> list[dict]:
-            return await self.memory.recall(user_id)
+        async def recall_user_memory() -> list[dict]:                       # 异步获取用户记忆
+            return await self.memory.recall(user_id)                        #
 
         tools = build_tools(
             normalize_chain=self.normalize_chain,
@@ -164,25 +164,28 @@ class RAGService:
             recall_memory=recall_user_memory,
         )
         agent = build_agent(
-            model=self.chat_model,
-            tools=tools,
-            checkpointer=self.memory.checkpointer,
-            store=self.memory.store,
+            model=self.chat_model,                  # 模型
+            tools=tools,                            # 工具
+            checkpointer=self.memory.checkpointer,  # 记忆检查点
+            store=self.memory.store,                # 记忆存储
         )
         config = {
             "configurable": {
                 "thread_id": thread.thread_id,
-                "user_id": user_id or "anonymous",
+                "user_id": user_id or "anonymous", # 用户id, 代码主动调用时使用，框架不用
             }
         }
-        result = await agent.ainvoke(
+        # 把用户的问题交给 Agent，让 Agent 根据系统提示自主决定调用哪些工具、调用顺序以及最终如何回答
+        result = await agent.ainvoke(                                   # 执行agent
             {"messages": [{"role": "user", "content": message}]},
             config=config,
         )
-        agent_answer = self._extract_answer(result)
+        logger.info("Agent result: %s", result)
+        agent_answer = self._extract_answer(result)     # 提取答案
+        logger.info("Agent answer: %s", agent_answer)
 
-        if trace.query_context is None or trace.intent is None:
-            context, intent = await run_in_threadpool(self.build_query_context, message, [])
+        if trace.query_context is None or trace.intent is None:   # 防止工具未使用导致上下文丢失
+            context, intent = await run_in_threadpool(self.build_query_context, message, [])        #在线程池中执行，并且等待它执行完成后拿到返回值
         else:
             context = trace.query_context
             context["original_query"] = message
@@ -206,7 +209,7 @@ class RAGService:
             answer = "我不知道"
         else:
             retrieved = trace.retrieved_context
-            if retrieved is None:
+            if retrieved is None:                           # 如果没有检索到上下文，则重新检索
                 retrieved = await run_in_threadpool(
                     self.rag_chain.invoke,
                     context["contextualized_query"],
@@ -219,7 +222,8 @@ class RAGService:
                     context,
                     retrieved,
                 )
-
+                
+        # 提取记忆并保存到数据库
         memory_task = asyncio.create_task(
             self.memory.extract_and_save(
                 user_id=user_id,
