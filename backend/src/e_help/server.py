@@ -30,7 +30,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_settings()
     service = RAGService(settings)
     app.state.service = service
-    yield
+    await service.setup()
+    try:
+        yield
+    finally:
+        await service.close()
 
 
 app = FastAPI(title="e-help", lifespan=lifespan)
@@ -96,7 +100,7 @@ async def chat_stream(request: Request, payload: ChatRequest): # ChatRequest接�
             thread_id = payload.thread_id
 
         # 这一行只是获取异步生成器对象，还没有真正执行 stream_answer() 内部的代码，所以这里不需要 async for
-        stream = rag.stream_answer(thread_id, payload.message)
+        stream = rag.stream_answer(thread_id, payload.message, user_id=payload.user_id)
 
         next_event: asyncio.Task | None = None
         # time 模块提供的一个单调递增计时器，它返回的是一个表示“程序运行后经过了多久”的时间值

@@ -38,6 +38,7 @@ dependencies = [
     "dashscope==1.25.6",
     "tencentcloud-sdk-python==3.1.86",
     "PyJWT==2.10.1",
+    "psycopg[binary]>=3.2.0",
 ]
 
 [project.scripts]

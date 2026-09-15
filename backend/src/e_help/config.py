@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     top_k: int = 5
     intent_confidence_threshold: float = 0.65
     rewrite_history_turns: int = 6
+    db_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("db_url", "DB_URL"),
+    )
+    long_term_memory_limit: int = 5
 
     def resolved_embedding_base_url(self) -> str | None:
         return self.close_api_base_url or self.closeai_base_url

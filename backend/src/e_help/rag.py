@@ -2,14 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+import asyncio
 import logging
 from threading import Lock
 from uuid import uuid4
 
+from langchain_core.messages import AIMessage
 from openai import APIConnectionError
 from pymilvus.exceptions import MilvusException
 from starlette.concurrency import run_in_threadpool
 
+from .agent import AgentToolTrace, MemoryManager, build_agent, build_tools
 from .chains import AnswerChain, IntentChain, NormalizeChain, RagChain, RewriteChain
 from .config import Settings
 from .knowledge import load_document, split_document
@@ -71,10 +74,12 @@ class RAGService:
             history_turns=settings.rewrite_history_turns,
         )
         self.answer_chain = AnswerChain(self.chat_model)
+        self.memory = MemoryManager(settings, self.chat_model)
 
         self.store: MilvusStore | None = None
         self.retriever: MilvusRetriever | None = None
         self.rag_chain: RagChain | None = None
+        self._memory_tasks: set[asyncio.Task] = set()
         # 启动只连接并加载已有 collection，不自动执行 knowledge.txt 重建。
         # Milvus 暂时不可用时保留服务进程，由健康检查暴露降级原因。
         try:
@@ -84,6 +89,14 @@ class RAGService:
             self.index_ready = False
             self.index_error = self._format_error(exc)
             logger.warning("Milvus initialization skipped: %s", self.index_error)
+
+    async def setup(self) -> None:
+        await self.memory.setup()
+
+    async def close(self) -> None:
+        if self._memory_tasks:
+            await asyncio.gather(*self._memory_tasks, return_exceptions=True)
+        await self.memory.close()
 
     def create_thread(self) -> ThreadState:
         thread = ThreadState(thread_id=str(uuid4()), created_at=datetime.utcnow())
@@ -97,6 +110,10 @@ class RAGService:
                 existing = self.threads.get(thread_id)
             if existing is not None:
                 return existing
+            thread = ThreadState(thread_id=thread_id, created_at=datetime.utcnow())
+            with self.lock:
+                self.threads[thread_id] = thread
+            return thread
         return self.create_thread()
 
     def build_query_context(
@@ -126,19 +143,61 @@ class RAGService:
     def route_query(self, context: QueryContext) -> str:
         return route_query(context)
 
-    def answer(self, thread_id: str | None, message: str) -> RAGResult:
+    async def answer(
+        self,
+        thread_id: str | None,
+        message: str,
+        user_id: str | None = None,
+    ) -> RAGResult:
         thread = self.get_or_create_thread(thread_id)                       # 获取对话的id
-        history = list(thread.messages)                                     # 对话的历史消息
-        thread.messages.append(ChatMessage(role="user", content=message))   # 将用户提问加入到对话的历史消息，这个和checkpoint有什么区别？
+        trace = AgentToolTrace()
 
-        context, intent = self.build_query_context(message, history)        # query 预处理 normallize
+        async def recall_user_memory() -> list[dict]:
+            return await self.memory.recall(user_id)
+
+        tools = build_tools(
+            normalize_chain=self.normalize_chain,
+            intent_chain=self.intent_chain,
+            rewrite_chain=self.rewrite_chain,
+            rag_chain=self.rag_chain,
+            trace=trace,
+            recall_memory=recall_user_memory,
+        )
+        agent = build_agent(
+            model=self.chat_model,
+            tools=tools,
+            checkpointer=self.memory.checkpointer,
+            store=self.memory.store,
+        )
+        config = {
+            "configurable": {
+                "thread_id": thread.thread_id,
+                "user_id": user_id or "anonymous",
+            }
+        }
+        result = await agent.ainvoke(
+            {"messages": [{"role": "user", "content": message}]},
+            config=config,
+        )
+        agent_answer = self._extract_answer(result)
+
+        if trace.query_context is None or trace.intent is None:
+            context, intent = await run_in_threadpool(self.build_query_context, message, [])
+        else:
+            context = trace.query_context
+            context["original_query"] = message
+            intent = trace.intent
+
         route = self.route_query(context)                                   # 路由
 
         retrieved: RetrievedContext | None = None
         if route == "blocked":
             answer = SAFETY_BLOCK_MESSAGE
         elif route == "chitchat":                                           # 闲聊对话
-            answer = self.answer_chain.answer_chitchat(context["normalized_query"])
+            answer = agent_answer or await run_in_threadpool(
+                self.answer_chain.answer_chitchat,
+                context["normalized_query"],
+            )
         elif route == "tool":
             answer = TOOL_UNAVAILABLE_MESSAGE
         elif not context["need_retrieval"]:
@@ -146,14 +205,30 @@ class RAGService:
         elif self.rag_chain is None:
             answer = "我不知道"
         else:
-            retrieved = self.rag_chain.invoke(context["contextualized_query"])      # 检索上下文
+            retrieved = trace.retrieved_context
+            if retrieved is None:
+                retrieved = await run_in_threadpool(
+                    self.rag_chain.invoke,
+                    context["contextualized_query"],
+                )
             if not retrieved.chunks:
                 answer = "我不知道"
             else:
-                print(f"chat : {context['contextualized_query']}, retrieved: {retrieved}")
-                answer = self.answer_chain.answer_rag(context, retrieved)           # 检索后回答问题
+                answer = agent_answer or await run_in_threadpool(
+                    self.answer_chain.answer_rag,
+                    context,
+                    retrieved,
+                )
 
-        thread.messages.append(ChatMessage(role="assistant", content=answer))
+        memory_task = asyncio.create_task(
+            self.memory.extract_and_save(
+                user_id=user_id,
+                user_message=message,
+                assistant_message=answer,
+            )
+        )
+        self._memory_tasks.add(memory_task)
+        memory_task.add_done_callback(self._memory_tasks.discard)
         return RAGResult(
             thread_id=thread.thread_id,
             answer=answer,
@@ -190,10 +265,10 @@ class RAGService:
         self.store.upsert_chunks(chunks)
         return len(chunks)
 
-    async def stream_answer(self, thread_id: str | None, message: str):
+    async def stream_answer(self, thread_id: str | None, message: str, user_id: str | None = None):
         # run_in_threadpool 时Starlette的工具函数，
         # 作用： 在async协程（事件循环）里面，安全同步阻塞函数，把它丢进县城池跑，不会卡死事件循环
-        result = await run_in_threadpool(self.answer, thread_id, message)
+        result = await self.answer(thread_id, message, user_id=user_id)
         context = result.query_context
         yield {
             "event": "intent.completed",
@@ -241,6 +316,25 @@ class RAGService:
             top_k=self.settings.top_k,
         )
         self.rag_chain = RagChain(self.retriever)
+
+    @staticmethod
+    def _extract_answer(agent_result) -> str:
+        messages = agent_result.get("messages", []) if isinstance(agent_result, dict) else []
+        if not messages:
+            return ""
+        message = messages[-1]
+        content = message.content if isinstance(message, AIMessage) else getattr(message, "content", "")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    parts.append(str(part.get("text", "")))
+                elif isinstance(part, str):
+                    parts.append(part)
+            return "".join(parts).strip()
+        return str(content).strip()
 
     def _format_error(self, exc: Exception) -> str:
         if isinstance(exc, APIConnectionError):
