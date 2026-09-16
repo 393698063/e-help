@@ -43,28 +43,47 @@ class RewriteChain:
         )
 
     def invoke(self, normalized_query: str, history: list[ChatMessage]) -> RewriteResult:
+        early, cache_key, payload = self._precheck(normalized_query, history)
+        if early is not None:
+            return early
+
+        try:
+            rewrite = self._parse(self._chain.invoke(payload))
+        except Exception:
+            rewrite = RewriteResult(contextualized_query=normalized_query, should_retrieve=True)
+        self._cache.set(cache_key, rewrite)
+        return rewrite
+
+    async def ainvoke(self, normalized_query: str, history: list[ChatMessage]) -> RewriteResult:
+        early, cache_key, payload = self._precheck(normalized_query, history)
+        if early is not None:
+            return early
+
+        try:
+            rewrite = self._parse(await self._chain.ainvoke(payload))
+        except Exception:
+            rewrite = RewriteResult(contextualized_query=normalized_query, should_retrieve=True)
+        self._cache.set(cache_key, rewrite)
+        return rewrite
+
+    def _precheck(self, normalized_query: str, history: list[ChatMessage]):
+        """公共预处理：命中免改写/缓存则返回结果，否则给出缓存键和模型入参。"""
         recent = history[-self.history_turns :]
         if not self.needs_rewrite(normalized_query, recent):
-            return RewriteResult(contextualized_query=normalized_query, should_retrieve=True)
+            return RewriteResult(contextualized_query=normalized_query, should_retrieve=True), None, None
 
         recent_messages = "\n".join(f"{message.role}: {message.content}" for message in recent)
         cache_key = self._cache_key(normalized_query, recent_messages)
         cached = self._cache.get(cache_key)
         if cached is not None:
-            return cached
+            return cached, None, None
 
-        try:
-            result = self._chain.invoke(
-                {
-                    "recent_messages": recent_messages,
-                    "normalized_query": normalized_query,
-                }
-            )
-            rewrite = result if isinstance(result, RewriteResult) else RewriteResult.model_validate(result)
-        except Exception:
-            rewrite = RewriteResult(contextualized_query=normalized_query, should_retrieve=True)
-        self._cache.set(cache_key, rewrite)
-        return rewrite
+        payload = {"recent_messages": recent_messages, "normalized_query": normalized_query}
+        return None, cache_key, payload
+
+    @staticmethod
+    def _parse(result) -> RewriteResult:
+        return result if isinstance(result, RewriteResult) else RewriteResult.model_validate(result)
 
     @classmethod
     def needs_rewrite(cls, query: str, history: list[ChatMessage]) -> bool:

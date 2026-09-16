@@ -1,6 +1,7 @@
 from .query_context import (
     ChatMessage,
     ChatRequest,
+    ThreadCreateRequest,
     IntentEntities,
     IntentResult,
     IntentType,
@@ -18,6 +19,7 @@ from .query_context import (
 __all__ = [
     "ChatMessage",
     "ChatRequest",
+    "ThreadCreateRequest",
     "IntentEntities",
     "IntentResult",
     "IntentType",

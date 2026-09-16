@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     app_name: str = "e-help"
     backend_host: str = "0.0.0.0"
     backend_port: int = 8000
+    log_level: str = "INFO"
     knowledge_path: Path = Field(
         default_factory=lambda: Path(__file__).resolve().parents[2] / "knowledge.txt"
     )
@@ -48,6 +49,30 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("db_url", "DB_URL"),
     )
     long_term_memory_limit: int = 5
+
+    # Agent 运行预算和外部工具边界，均可由环境变量覆盖。
+    agent_timeout_seconds: float = 60.0
+    agent_recursion_limit: int = 20
+    agent_max_model_calls: int = 10
+    agent_max_tool_calls: int = 12
+    tool_model_timeout_seconds: float = 30.0
+    tool_embedding_timeout_seconds: float = 15.0
+    tool_milvus_timeout_seconds: float = 5.0
+    tool_memory_timeout_seconds: float = 3.0
+    tool_max_retries: int = 2                       # 工具最大重试次数
+    tool_retry_initial_delay_seconds: float = 0.5
+    tool_retry_max_delay_seconds: float = 4.0
+    tool_max_query_length: int = 2000
+    tool_max_result_chars: int = 12000              # 工具返回的最大字符数
+    tool_max_retrieval_top_k: int = 10
+
+    # PostgreSQL pool and socket boundaries.
+    db_pool_min_size: int = 1
+    db_pool_max_size: int = 8
+    db_pool_timeout_seconds: float = 10.0
+    db_connect_timeout_seconds: float = 10.0
+    db_socket_timeout_seconds: float = 30.0
+    db_reconnect_timeout_seconds: float = 30.0
 
     def resolved_embedding_base_url(self) -> str | None:
         return self.close_api_base_url or self.closeai_base_url

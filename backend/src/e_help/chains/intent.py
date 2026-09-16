@@ -57,6 +57,22 @@ class IntentChain:
             return cached
 
         safety, intent = self._invoke_analysis(normalized_query)
+        return self._finalize(normalized_query, safety, intent)
+
+    async def ainvoke(self, normalized_query: str) -> tuple[SafetyResult, IntentResult]:
+        cached = self._cache.get(normalized_query)
+        if cached is not None:
+            return cached
+
+        safety, intent = await self._ainvoke_analysis(normalized_query)
+        return self._finalize(normalized_query, safety, intent)
+
+    def _finalize(
+        self,
+        normalized_query: str,
+        safety: SafetyResult,
+        intent: IntentResult,
+    ) -> tuple[SafetyResult, IntentResult]:
         if intent.confidence < self.confidence_threshold:               # 为什么时小于？
             intent = intent.model_copy(update={"intent": "rag", "need_retrieval": True})
         result = (safety, intent)
@@ -65,31 +81,39 @@ class IntentChain:
 
     def _invoke_analysis(self, query: str) -> tuple[SafetyResult, IntentResult]:
         try:
-            result = self._chain.invoke({"query": query})
-            analysis = (
-                result
-                if isinstance(result, QueryAnalysisResult)
-                else QueryAnalysisResult.model_validate(result)
-            )
-            safety = SafetyResult(status=analysis.safety_status, reason=analysis.safety_reason)
-            intent = IntentResult(
-                intent=analysis.intent,
-                entities=analysis.entities,
-                need_retrieval=analysis.need_retrieval,
-                confidence=analysis.confidence,
-                reason=analysis.reason,
-            )
-            if safety.status == "block":
-                intent = IntentResult(
-                    intent="rag",
-                    entities={},
-                    need_retrieval=False,
-                    confidence=1.0,
-                    reason="安全检查已阻断请求",
-                )
-            return safety, intent
+            return self._build_analysis(self._chain.invoke({"query": query}))
         except Exception:
             return self._fallback_analysis(query)
+
+    async def _ainvoke_analysis(self, query: str) -> tuple[SafetyResult, IntentResult]:
+        try:
+            return self._build_analysis(await self._chain.ainvoke({"query": query}))
+        except Exception:
+            return self._fallback_analysis(query)
+
+    def _build_analysis(self, result) -> tuple[SafetyResult, IntentResult]:
+        analysis = (
+            result
+            if isinstance(result, QueryAnalysisResult)
+            else QueryAnalysisResult.model_validate(result)
+        )
+        safety = SafetyResult(status=analysis.safety_status, reason=analysis.safety_reason)
+        intent = IntentResult(
+            intent=analysis.intent,
+            entities=analysis.entities,
+            need_retrieval=analysis.need_retrieval,
+            confidence=analysis.confidence,
+            reason=analysis.reason,
+        )
+        if safety.status == "block":
+            intent = IntentResult(
+                intent="rag",
+                entities={},
+                need_retrieval=False,
+                confidence=1.0,
+                reason="安全检查已阻断请求",
+            )
+        return safety, intent
 
     def _fallback_analysis(self, query: str) -> tuple[SafetyResult, IntentResult]:
         lowered = query.lower()

@@ -13,7 +13,9 @@ from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from .config import get_settings
-from .models import ChatRequest, ReindexResponse, ThreadCreateResponse
+from .agent.runtime import AgentRunLimitExceeded
+from .logger import configure_logging, logger
+from .models import ChatRequest, ReindexResponse, ThreadCreateRequest, ThreadCreateResponse
 from .rag import RAGService
 
 
@@ -28,6 +30,7 @@ service: RAGService | None = None
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global service
     settings = get_settings()
+    configure_logging(settings.log_level)
     service = RAGService(settings)
     app.state.service = service
     await service.setup()
@@ -48,7 +51,8 @@ app.add_middleware(
     allow_headers=["*"],            # 个允许跨域请求的 HTTP 请求头列表。默认为 []。你可以使用 ['*'] 允许所有的请求头。Accept、Accept-Language、Content-Language 以及 Content-Type 这几个请求头在简单 CORS 请求中总是被允许
 )
 
-
+# 当前 RAGService 是一个共享状态的单进程服务。它已经具备基于 thread_id 和 user_id 的逻辑隔离，
+# 但真正的安全隔离还依赖身份认证、持久化的线程归属校验，以及同一会话的并发控制
 def get_service() -> RAGService:
     if service is None:
         raise RuntimeError("service not initialized")
@@ -65,9 +69,12 @@ async def health():
     }
 
 # 创建thread
-@app.post("/api/threads", response_model=ThreadCreateResponse)
-async def create_thread():
-    thread = get_service().create_thread()
+@app.post("/api/threads", response_model=ThreadCreateResponse)  # response_model 指定返回的响应模型
+async def create_thread(payload: ThreadCreateRequest | None = None):
+    thread = get_service().create_thread(                       # 通过requestid和userid获取缓存的thread ID，如果没有则创建新的thread
+        user_id=payload.user_id if payload else None,
+        request_id=payload.request_id if payload else None,
+    )
     return ThreadCreateResponse(thread_id=thread.thread_id, created_at=thread.created_at)
 
 # 重建索引
@@ -91,32 +98,45 @@ async def chat_stream(request: Request, payload: ChatRequest): # ChatRequest接�
     async def event_generator():
         if await request.is_disconnected():
             return
-
-        if not payload.thread_id:
-            thread = rag.create_thread()
-            yield _sse_event("thread.created", {"thread_id": thread.thread_id})
-            thread_id = thread.thread_id
-        else:
-            thread_id = payload.thread_id
-
-        # 这一行只是获取异步生成器对象，还没有真正执行 stream_answer() 内部的代码，所以这里不需要 async for
-        stream = rag.stream_answer(thread_id, payload.message, user_id=payload.user_id)
-
+        # 获取会话线程id
+        thread_id = payload.thread_id
+        stream = None
         next_event: asyncio.Task | None = None
         # time 模块提供的一个单调递增计时器，它返回的是一个表示“程序运行后经过了多久”的时间值
         last_ping = monotonic()
         try:
+            
+            if not thread_id:
+                logger.info("SSE: no thread_id")
+                thread = rag.create_thread(
+                    payload.user_id,
+                    request_id=payload.request_id,
+                )
+                yield _sse_event(
+                    "thread.created",
+                    {"thread_id": thread.thread_id, "request_id": payload.request_id},
+                )
+                thread_id = thread.thread_id
+
+            # 这里只创建异步生成器，不会执行 stream_answer 的函数体。
+            stream = rag.stream_answer(
+                thread_id,
+                payload.message,
+                user_id=payload.user_id,
+                request_id=payload.request_id,
+            )
             while True:
                 if await request.is_disconnected():
                     return
 
                 if next_event is None:
                     # 从异步生成器 stream 中异步获取下一个事件，并把这个读取操作放到一个独立的 asyncio 任务中执行
-                    next_event = asyncio.create_task(stream.__anext__())
+                    next_event = asyncio.create_task(stream.__anext__()) # __anext__() 是一个异步生成器的方法，用于获取下一个值。
 
                 # 最多等待 1 秒，检查这个任务是否完成。
                 done, _ = await asyncio.wait({next_event}, timeout=1.0)
                 if not done: # 如果任务还没完成，继续循环
+                    logger.debug("SSE: 1s 未完成任务，waiting for next event")
                     if await request.is_disconnected():   # 如果客户端已经断开连接
                         next_event.cancel()    # 取消这个任务，防止它继续执行
 
@@ -132,6 +152,7 @@ async def chat_stream(request: Request, payload: ChatRequest): # ChatRequest接�
                         return
                     # 每隔 15 秒发送一个 ping 事件，保持连接不被关闭
                     if monotonic() - last_ping >= 15:
+                        logger.debug("SSE: 15s 未发送 ping，发送 ping") 
                         yield ": ping\n\n"
                         last_ping = monotonic()
                     continue
@@ -140,6 +161,7 @@ async def chat_stream(request: Request, payload: ChatRequest): # ChatRequest接�
                 # 如果任务已经完成，获取它的结果
                 try:
                     event = next_event.result()
+                    logger.debug("SSE: 收到事件 %s", event["event"], "-data:",event["data"])
                 except StopAsyncIteration:
                     break
                 finally:
@@ -150,13 +172,14 @@ async def chat_stream(request: Request, payload: ChatRequest): # ChatRequest接�
                     return
         except Exception as exc:  # noqa: BLE001
             if not await request.is_disconnected():
-                yield _sse_event("error", {"message": str(exc)})
+                yield _sse_event("error", {"message": _public_error(exc)})
         finally:
             if next_event is not None and not next_event.done():
                 next_event.cancel()
                 with suppress(asyncio.CancelledError):
                     await next_event
-            await stream.aclose()
+            if stream is not None:
+                await stream.aclose()
 
     # StreamingResponse 持续向这个 HTTP Response 写数据，StreamingResponse 
     # 本身只是让 FastAPI 可以边生成边发送数据，
@@ -174,3 +197,15 @@ async def chat_stream(request: Request, payload: ChatRequest): # ChatRequest接�
 
 def _sse_event(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _public_error(exc: Exception) -> str:
+    if isinstance(exc, PermissionError):
+        return "无权访问该对话。"
+    if isinstance(exc, ValueError):
+        return "请求参数无效，请检查 request_id、thread_id 和消息内容。"
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+        return "当前服务响应较慢，请稍后重试。"
+    if isinstance(exc, AgentRunLimitExceeded):
+        return "当前请求执行步骤过多，请换一种方式描述问题。"
+    return "服务处理失败，请稍后重试。"

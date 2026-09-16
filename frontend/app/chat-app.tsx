@@ -53,7 +53,14 @@ export default function ChatApp() {
   async function createThread() {
     setError("");
     setStatus("正在新建对话");
-    const response = await fetch("/api/threads", { method: "POST" });
+    const response = await fetch("/api/threads", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        user_id: userId || null,
+        request_id: crypto.randomUUID(),
+      }),
+    });
     const data = await response.json();
     setThreadId(data.thread_id);
     setMessages([]);
@@ -74,6 +81,8 @@ export default function ChatApp() {
     const payload = {
       thread_id: currentThreadId || null,
       user_id: userId || null,
+      // 同一个 request_id 重试时，后端可以复用已经完成的结果。
+      request_id: crypto.randomUUID(),
       message: text,
     };
 
@@ -129,6 +138,18 @@ export default function ChatApp() {
 
         if (parsed.event === "retrieval.completed") {
           setStatus("已检索到上下文");
+        }
+
+        if (parsed.event === "tool.started") {
+          setStatus(`正在调用 ${String(parsed.data.tool_name ?? "工具")}`);
+        }
+
+        if (parsed.event === "tool.completed") {
+          setStatus(`已完成 ${String(parsed.data.tool_name ?? "工具")}`);
+        }
+
+        if (parsed.event === "tool.failed") {
+          setStatus(`工具调用失败：${String(parsed.data.tool_name ?? "未知工具")}`);
         }
 
         if (parsed.event === "message.delta") {
@@ -262,4 +283,3 @@ function parseSSE(chunk: string): SSEEvent | null {
     return null;
   }
 }
-
