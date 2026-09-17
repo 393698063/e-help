@@ -45,6 +45,9 @@ class RAGResult:
     query_context: QueryContext
     intent: IntentResult
     retrieved_context: RetrievedContext | None = None
+    conversation_summary: str = ""
+    recent_messages: list[ChatMessage] = field(default_factory=list)
+    long_term_memories: list[dict] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -165,6 +168,7 @@ class RAGService:
         self,
         query: str,
         history: list[ChatMessage],
+        conversation_summary: str = "",
     ) -> tuple[QueryContext, IntentResult]:
         normalized = self.normalize_chain.invoke(query).normalized_query
         safety, intent = self.intent_chain.invoke(normalized)
@@ -179,7 +183,7 @@ class RAGService:
             "safety_reason": safety.reason,
         }
         if safety.status == "allow" and intent.intent == "rag":
-            rewrite = self.rewrite_chain.invoke(normalized, history)
+            rewrite = self.rewrite_chain.invoke(normalized, history, conversation_summary)
             context["contextualized_query"] = rewrite.contextualized_query
             context["need_retrieval"] = rewrite.should_retrieve
         return context, intent
@@ -220,6 +224,10 @@ class RAGService:
             return record.result            # ④ 正常:直接复用拥有者算好的结果
 
         try:
+            conversation_summary, long_term_memories = await asyncio.gather(
+                self._safe_recall_summary(thread.thread_id),
+                self._safe_recall_memories(user_id),
+            )
             budget = RunBudget(
                 max_model_calls=self.settings.agent_max_model_calls,
                 max_tool_calls=self.settings.agent_max_tool_calls,
@@ -269,14 +277,18 @@ class RAGService:
                 result
             )
             agent_answer = self._extract_answer(result)
+            checkpoint_messages = self._extract_chat_messages(result)
+            recent_messages = checkpoint_messages[-self.settings.memory_recent_message_limit :]
 
-            # 
+            # 构建上下文和意图，如果 trace 已经提供了，则复用
+
             if trace.query_context is None or trace.intent is None:
                 context, intent = await asyncio.wait_for(
                     run_in_threadpool(
                         self.build_query_context,
                         message,
-                        [],
+                        recent_messages,
+                        conversation_summary,
                     ),
                     timeout=self.settings.tool_model_timeout_seconds * 2,
                 )
@@ -285,6 +297,7 @@ class RAGService:
                 context["original_query"] = message
                 intent = trace.intent
 
+            # 路由查询
             route = self.route_query(context)
             retrieved: RetrievedContext | None = None
             if route == "blocked":
@@ -294,6 +307,9 @@ class RAGService:
                     run_in_threadpool(
                         self.answer_chain.answer_chitchat,
                         context["normalized_query"],
+                        conversation_summary=conversation_summary,
+                        recent_messages=recent_messages,
+                        long_term_memories=long_term_memories,
                     ),
                     timeout=self.settings.tool_model_timeout_seconds,
                 )
@@ -306,6 +322,7 @@ class RAGService:
             elif self.rag_chain is None:
                 answer = "当前知识库服务暂不可用，请稍后重试。"
             else:
+                # 检索知识库
                 retrieved = trace.retrieved_context
                 if retrieved is None:
                     retrieved = await run_in_threadpool(
@@ -320,15 +337,31 @@ class RAGService:
                             self.answer_chain.answer_rag,
                             context,
                             retrieved,
+                            conversation_summary=conversation_summary,
+                            recent_messages=recent_messages,
+                            long_term_memories=long_term_memories,
                         ),
                         timeout=self.settings.tool_model_timeout_seconds,
                     )
 
+            if not checkpoint_messages:
+                checkpoint_messages = [
+                    *thread.messages,
+                    ChatMessage(role="user", content=message),
+                    ChatMessage(role="assistant", content=answer),
+                ]
+                recent_messages = checkpoint_messages[-self.settings.memory_recent_message_limit :]
+
+            with self.lock:
+                thread.messages = recent_messages
+
             memory_task = asyncio.create_task(
-                self.memory.extract_and_save(
+                self._update_memory_layers(
                     user_id=user_id,
+                    thread_id=thread.thread_id,
                     user_message=message,
                     assistant_message=answer,
+                    messages=checkpoint_messages,
                 )
             )
             self._memory_tasks.add(memory_task)
@@ -339,6 +372,9 @@ class RAGService:
                 query_context=context,
                 intent=intent,
                 retrieved_context=retrieved,
+                conversation_summary=conversation_summary,
+                recent_messages=recent_messages,
+                long_term_memories=long_term_memories,
             )
             await self._complete_request(request_id, result=final_result)
             return final_result
@@ -574,6 +610,46 @@ class RAGService:
                         self.request_records.pop(key, None)
                         break
 
+    async def _safe_recall_summary(self, thread_id: str) -> str:
+        try:
+            return await self.memory.recall_summary(thread_id)
+        except Exception as exc:  # noqa: BLE001
+            if self.memory.is_connection_error(exc):
+                await self.memory.reconnect()
+            logger.warning("Conversation summary recall skipped: %s", exc)
+            return ""
+
+    async def _safe_recall_memories(self, user_id: str | None) -> list[dict]:
+        try:
+            return await self.memory.recall(user_id)
+        except Exception as exc:  # noqa: BLE001
+            if self.memory.is_connection_error(exc):
+                await self.memory.reconnect()
+            logger.warning("Long-term memory recall skipped: %s", exc)
+            return []
+
+    async def _update_memory_layers(
+        self,
+        *,
+        user_id: str | None,
+        thread_id: str,
+        user_message: str,
+        assistant_message: str,
+        messages: list[ChatMessage],
+    ) -> None:
+        results = await asyncio.gather(
+            self.memory.extract_and_save(
+                user_id=user_id,
+                user_message=user_message,
+                assistant_message=assistant_message,
+            ),
+            self.memory.update_summary(thread_id, messages),
+            return_exceptions=True,
+        )
+        for result in results:
+            if isinstance(result, Exception):
+                logger.warning("Memory layer update skipped: %s", result)
+
     def _connect_store(self) -> None:
         store = MilvusStore(
             uri=self.settings.resolved_milvus_uri(),
@@ -609,6 +685,44 @@ class RAGService:
                     parts.append(part)
             return "".join(parts).strip()
         return str(content).strip()
+
+    @classmethod
+    def _extract_chat_messages(cls, agent_result) -> list[ChatMessage]:
+        raw_messages = agent_result.get("messages", []) if isinstance(agent_result, dict) else []
+        messages: list[ChatMessage] = []
+        for raw in raw_messages:
+            role = cls._message_role(raw)
+            if role not in {"user", "assistant"}:
+                continue
+            content = cls._message_content(raw).strip()
+            if content:
+                messages.append(ChatMessage(role=role, content=content))
+        return messages
+
+    @staticmethod
+    def _message_role(message) -> str:
+        role = getattr(message, "type", None) or getattr(message, "role", None)
+        name = message.__class__.__name__.lower()
+        if role in {"human", "user"} or "human" in name:
+            return "user"
+        if role in {"ai", "assistant"} or "ai" in name:
+            return "assistant"
+        return str(role or "")
+
+    @staticmethod
+    def _message_content(message) -> str:
+        content = getattr(message, "content", "")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    parts.append(str(part.get("text", "")))
+                elif isinstance(part, str):
+                    parts.append(part)
+            return "".join(parts)
+        return str(content)
 
     def _format_error(self, exc: Exception) -> str:
         if isinstance(exc, APIConnectionError):

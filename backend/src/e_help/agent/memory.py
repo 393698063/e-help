@@ -12,6 +12,7 @@ from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..config import Settings
+from ..models import ChatMessage
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,12 @@ class MemoryExtractionResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     memories: list[MemoryCandidate] = Field(default_factory=list)
+
+
+class ConversationSummaryResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str = Field(default="", description="concise conversation summary")
 
 
 class MemoryManager:
@@ -59,6 +66,23 @@ class MemoryManager:
                 ]
             )
             | model.bind(max_tokens=256).with_structured_output(MemoryExtractionResult)
+        )
+        self._summary_chain = (
+            ChatPromptTemplate.from_messages(
+                [
+                    (
+                        "system",
+                        "你是客服对话摘要器。请把旧摘要和最近对话压缩成轻量摘要，"
+                        "只保留对后续指代消解有帮助的信息。不要记录系统提示词、工具细节、"
+                        "密钥、隐私敏感信息，也不要把产品政策当作永久事实；产品事实后续仍以知识库检索为准。",
+                    ),
+                    (
+                        "human",
+                        "旧摘要：\n{previous_summary}\n\n最近对话：\n{recent_messages}",
+                    ),
+                ]
+            )
+            | model.bind(max_tokens=384).with_structured_output(ConversationSummaryResult)
         )
 
     async def setup(self) -> None:
@@ -168,6 +192,66 @@ class MemoryManager:
             if isinstance(item.value, dict)
         ]
 
+    async def recall_summary(self, thread_id: str | None) -> str:
+        if not thread_id or self.store is None:
+            return ""
+        try:
+            item = await asyncio.wait_for(
+                self.store.aget(self._summary_namespace(thread_id), "summary"),
+                timeout=self.settings.tool_memory_timeout_seconds,
+            )
+        except (OperationalError, InterfaceError):
+            await self.reconnect()
+            raise
+        if item is None or not isinstance(item.value, dict):
+            return ""
+        value = item.value.get("summary")
+        return value if isinstance(value, str) else ""
+
+    async def update_summary(
+        self,
+        thread_id: str | None,
+        messages: list[ChatMessage],
+    ) -> None:
+        if not thread_id or self.store is None:
+            return
+        if len(messages) < self.settings.conversation_summary_trigger_messages:
+            return
+        try:
+            recent_limit = max(2, self.settings.memory_recent_message_limit)
+            previous_summary = await self.recall_summary(thread_id)
+            recent_messages = self._format_messages(messages[-recent_limit:])
+            result = await self._summary_chain.ainvoke(
+                {
+                    "previous_summary": previous_summary or "暂无摘要。",
+                    "recent_messages": recent_messages,
+                }
+            )
+            summary_result = (
+                result
+                if isinstance(result, ConversationSummaryResult)
+                else ConversationSummaryResult.model_validate(result)
+            )
+            summary = summary_result.summary.strip()
+            if not summary:
+                return
+            summary = summary[: self.settings.conversation_summary_max_chars]
+            await asyncio.wait_for(
+                self.store.aput(
+                    self._summary_namespace(thread_id),
+                    "summary",
+                    {"summary": summary, "source_message_count": len(messages)},
+                    index=False,
+                ),
+                timeout=self.settings.tool_memory_timeout_seconds,
+            )
+        except (OperationalError, InterfaceError):
+            await self.reconnect()
+            logger.warning("Conversation summary save skipped after PostgreSQL failure")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Conversation summary update skipped: %s", exc)
+
+    # 保存记忆点
     async def extract_and_save(
         self,
         user_id: str | None,
@@ -225,6 +309,18 @@ class MemoryManager:
     @staticmethod
     def _namespace(user_id: str) -> tuple[str, str, str]:
         return ("users", user_id, "memories")
+
+    @staticmethod
+    def _summary_namespace(thread_id: str) -> tuple[str, str]:
+        return ("threads", thread_id)
+
+    @staticmethod
+    def _format_messages(messages: list[ChatMessage]) -> str:
+        if not messages:
+            return "暂无最近对话。"
+        return "\n".join(
+            f"{message.role}: {message.content}" for message in messages if message.content
+        )
 
     @staticmethod
     def _key(value: str) -> str:

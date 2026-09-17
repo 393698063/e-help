@@ -33,6 +33,7 @@ class AnalyzeToolInput(BaseModel):
 class RewriteToolInput(BaseModel):
     normalized_query: str = Field(min_length=1, max_length=2000)
     recent_messages: list[dict[str, str]] = Field(default_factory=list, max_length=12)
+    conversation_summary: str = Field(default="", max_length=1200)
 
 
 class RetrieveToolInput(BaseModel):
@@ -131,6 +132,7 @@ def build_tools(
     async def rewrite_query(
         normalized_query: str,
         recent_messages: list[dict[str, str]],
+        conversation_summary: str = "",
     ) -> dict[str, Any]:
         history = [
             ChatMessage(role=message["role"], content=message["content"])
@@ -140,7 +142,11 @@ def build_tools(
 
         async def operation():
             # LLM 调用走原生异步，避免占用线程池导致高并发下排队。
-            return await rewrite_chain.ainvoke(normalized_query, history)
+            return await rewrite_chain.ainvoke(
+                normalized_query,
+                history,
+                conversation_summary,
+            )
 
         rewrite = await boundary.run(
             "rewrite_query",
@@ -149,6 +155,7 @@ def build_tools(
             signature_data={
                 "normalized_query": normalized_query,
                 "recent_messages": [item.model_dump() for item in history],
+                "conversation_summary": conversation_summary,
             },
             retryable=_is_transient,
             model_call=True,

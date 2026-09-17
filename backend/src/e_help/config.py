@@ -49,6 +49,9 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("db_url", "DB_URL"),
     )
     long_term_memory_limit: int = 5
+    memory_recent_message_limit: int = 12
+    conversation_summary_trigger_messages: int = 20
+    conversation_summary_max_chars: int = 1200
 
     # Agent 运行预算和外部工具边界，均可由环境变量覆盖。
     agent_timeout_seconds: float = 60.0
