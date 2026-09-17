@@ -161,7 +161,7 @@ async def chat_stream(request: Request, payload: ChatRequest): # ChatRequest接�
                 # 如果任务已经完成，获取它的结果
                 try:
                     event = next_event.result()
-                    logger.debug("SSE: 收到事件 %s", event["event"], "-data:",event["data"])
+                    logger.debug("SSE: 收到事件 %s - data: %s", event["event"], event["data"])
                 except StopAsyncIteration:
                     break
                 finally:

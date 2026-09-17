@@ -84,7 +84,6 @@ class MemoryManager:
                 "prepare_threshold": 0,
                 "row_factory": dict_row,
                 "connect_timeout": self.settings.db_connect_timeout_seconds,
-                "socket_timeout": self.settings.db_socket_timeout_seconds,
             },
             check=AsyncConnectionPool.check_connection,
             open=False,
@@ -92,7 +91,7 @@ class MemoryManager:
         stack = AsyncExitStack()
         try:
             await stack.enter_async_context(pool)
-            await pool.wait()
+            await pool.wait(timeout=self.settings.db_pool_timeout_seconds)
             checkpointer = AsyncPostgresSaver(conn=pool)
             store = AsyncPostgresStore(conn=pool)
             await asyncio.wait_for(

@@ -5,7 +5,11 @@ import os
 import sys
 from typing import Final
 
-LOGGER_NAME: Final = "e_help"
+# 兼容两种启动方式：
+#   uv run uvicorn src.e_help.server:app  -> __name__ == "src.e_help.logger"
+#   uv run uvicorn e_help.server:app      -> __name__ == "e_help.logger"
+# 使用应用包名作为 logger 名，子模块的 logging.getLogger(__name__) 才能传播到这里。
+LOGGER_NAME: Final = __name__.rsplit(".", 1)[0]
 DEFAULT_LOG_FORMAT: Final = (
     "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 )

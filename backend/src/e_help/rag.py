@@ -211,6 +211,7 @@ class RAGService:
         )
         #这段是请求幂等（去重）机制里"非拥有者"分支的处理——当同一个 request_id 被并发重复请求时，只让第一个真正跑 Agent，其余的都在这里"搭便车"等结果
         if not owner:                       # 我不是拥有者 → 别人正在/已经处理这个 request_id
+            logger.debug("请求已经重复发出了，等待返回")
             await record.done.wait()        # ① 阻塞等待，直到拥有者把活干完
             if record.error is not None:    # ② 拥有者是失败结束的
                 raise record.error          #    → 把同一个异常抛给我,行为和拥有者一致
@@ -223,7 +224,7 @@ class RAGService:
                 max_model_calls=self.settings.agent_max_model_calls,
                 max_tool_calls=self.settings.agent_max_tool_calls,
             )
-            logger.debug("Starting request_id=%s", request_id, "RunBudget=%s", budget)
+            logger.debug("Starting request_id=%s RunBudget=%s", request_id, budget)
             trace.budget = budget
 
             async def recall_user_memory() -> list[dict]:
@@ -261,13 +262,15 @@ class RAGService:
                 timeout=self.settings.agent_timeout_seconds,
             )
             logger.info(
-                "Agent completed request_id=%s model_calls=%s tool_calls=%s",
+                "Agent completed request_id=%s model_calls=%s tool_calls=%s result=%s",
                 request_id,
                 budget.model_calls,
                 budget.tool_calls,
+                result
             )
             agent_answer = self._extract_answer(result)
 
+            # 
             if trace.query_context is None or trace.intent is None:
                 context, intent = await asyncio.wait_for(
                     run_in_threadpool(
