@@ -4,7 +4,14 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 from ..models import ChatMessage, QueryContext, RetrievedContext
-from ..prompts import CHITCHAT_SYSTEM_PROMPT, RAG_SYSTEM_PROMPT
+from ..prompts import (
+    CHITCHAT_MEMORY_PROMPT,
+    CHITCHAT_SYSTEM_PROMPT,
+    RAG_CONTEXT_PROMPT,
+    RAG_MEMORY_PROMPT,
+    RAG_RUNTIME_PROMPT,
+    RAG_SYSTEM_PROMPT,
+)
 
 
 class AnswerChain:
@@ -13,18 +20,19 @@ class AnswerChain:
             ChatPromptTemplate.from_messages(
                 [
                     ("system", RAG_SYSTEM_PROMPT),
+                    ("system", RAG_RUNTIME_PROMPT),
                     (
                         "human",
-                        "<conversation_summary>\n{conversation_summary}\n</conversation_summary>\n\n"
-                        "<recent_messages>\n{recent_messages}\n</recent_messages>\n\n"
-                        "<long_term_memory>\n{long_term_memory}\n</long_term_memory>\n\n"
-                        "<retrieved_context>\n{retrieved_context}\n</retrieved_context>\n\n"
+                        # 记忆和检索结果都是外部数据，不提升为 SystemMessage，
+                        # 避免知识库或历史消息中的文本获得系统指令级别。
+                        f"{RAG_MEMORY_PROMPT}\n\n"
+                        f"{RAG_CONTEXT_PROMPT}\n\n"
                         "用户问题：\n{contextualized_query}",
                     ),
                 ]
             )
             | model
-            | StrOutputParser() # StrOutputParser() 会从这个消息对象中提取 content，最终得到：content = retrieved_context + 用户问题： + contextualized_query
+            | StrOutputParser()
         )
         ## 这里是在构建一条 LangChain 链，不是立即执行模型调用，而是返回一个链对象
 #         构建链的时候：
@@ -37,9 +45,8 @@ class AnswerChain:
                     ("system", CHITCHAT_SYSTEM_PROMPT),
                     (
                         "human",
-                        "<conversation_summary>\n{conversation_summary}\n</conversation_summary>\n\n"
-                        "<recent_messages>\n{recent_messages}\n</recent_messages>\n\n"
-                        "<long_term_memory>\n{long_term_memory}\n</long_term_memory>\n\n"
+                        # 闲聊同样把历史和长期偏好作为数据传入，不能覆盖系统规则。
+                        f"{CHITCHAT_MEMORY_PROMPT}\n\n"
                         "用户消息：\n{query}",
                     ),
                 ]

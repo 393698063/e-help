@@ -214,7 +214,7 @@ def build_tools(
             "recall_user_memory",
             operation,
             timeout=settings.tool_memory_timeout_seconds,
-            signature_data={"user_id": trace.user_id},
+            signature_data={"user_id": trace.user_id, "query": trace.normalized_query},
             retryable=_is_transient,
         )
         if isinstance(memories, list):

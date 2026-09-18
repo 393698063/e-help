@@ -224,9 +224,10 @@ class RAGService:
             return record.result            # ④ 正常:直接复用拥有者算好的结果
 
         try:
+            # 查询记忆点
             conversation_summary, long_term_memories = await asyncio.gather(
-                self._safe_recall_summary(thread.thread_id),
-                self._safe_recall_memories(user_id),
+                self._safe_recall_summary(thread.thread_id),                    # 查询会话摘要
+                self._safe_recall_memories(user_id, message),                  # 按当前问题查询用户长期记忆点
             )
             budget = RunBudget(
                 max_model_calls=self.settings.agent_max_model_calls,
@@ -236,7 +237,7 @@ class RAGService:
             trace.budget = budget
 
             async def recall_user_memory() -> list[dict]:
-                return await self.memory.recall(user_id)
+                return await self.memory.recall(user_id, query=message)
 
             tools = build_tools(
                 normalize_chain=self.normalize_chain,
@@ -254,8 +255,8 @@ class RAGService:
                 store=self.memory.store,
             )
             config = {
-                "recursion_limit": self.settings.agent_recursion_limit,
-                "callbacks": [RunBudgetCallbackHandler(budget)],
+                "recursion_limit": self.settings.agent_recursion_limit, # 递归限制
+                "callbacks": [RunBudgetCallbackHandler(budget)],        # 预算限制
                 "configurable": {
                     "thread_id": thread.thread_id,
                     "user_id": user_id or "anonymous",
@@ -355,6 +356,8 @@ class RAGService:
             with self.lock:
                 thread.messages = recent_messages
 
+            # 这段是 answer() 拿到最终回答后的收尾阶段:把"更新记忆"这件慢活丢到后台异步跑,
+            # 同时立刻组装结果、标记请求完成并返回
             memory_task = asyncio.create_task(
                 self._update_memory_layers(
                     user_id=user_id,
@@ -364,8 +367,15 @@ class RAGService:
                     messages=checkpoint_messages,
                 )
             )
+            # ② 持有任务引用,防止被GC
+#             这是 asyncio 的一个经典且必要的写法:
+            # 问题:asyncio.create_task 返回的 task,事件循环只持有弱引用。如果你不留一个强引用,task 可能在跑完之前就被垃圾回收,导致它中途被静默取消(Python 官方文档明确警告过这点)。
+            # 解法:把 task 存进 self._memory_tasks(一个 set)保持强引用;再用 add_done_callback(self._memory_tasks.discard) 注册回调——任务一结束就把自己从 set 里移除,避免 set 无限膨胀导致内存泄漏。
+            # 一句话:加进 set 是为了"别被回收",完成后 discard 是为了"别堆积
             self._memory_tasks.add(memory_task)
             memory_task.add_done_callback(self._memory_tasks.discard)
+
+            # 组装最终结果
             final_result = RAGResult(
                 thread_id=thread.thread_id,
                 answer=answer,
@@ -619,9 +629,13 @@ class RAGService:
             logger.warning("Conversation summary recall skipped: %s", exc)
             return ""
 
-    async def _safe_recall_memories(self, user_id: str | None) -> list[dict]:
+    async def _safe_recall_memories(
+        self,
+        user_id: str | None,
+        query: str | None = None,
+    ) -> list[dict]:
         try:
-            return await self.memory.recall(user_id)
+            return await self.memory.recall(user_id, query=query)
         except Exception as exc:  # noqa: BLE001
             if self.memory.is_connection_error(exc):
                 await self.memory.reconnect()

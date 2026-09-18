@@ -167,7 +167,11 @@ class MemoryManager:
         self.checkpointer = None
         self.store = None
 
-    async def recall(self, user_id: str | None) -> list[dict[str, Any]]:
+    async def recall(
+        self,
+        user_id: str | None,
+        query: str | None = None,
+    ) -> list[dict[str, Any]]:
         if not user_id:
             return []
         if self.store is None:
@@ -178,11 +182,12 @@ class MemoryManager:
             items = await asyncio.wait_for(
                 self.store.asearch(
                     self._namespace(user_id),
-                    limit=self.settings.long_term_memory_limit,
+                    query=query or None,
+                    limit=self.settings.long_term_memory_limit,             # 限制返回的记录数
                 ),
                 timeout=self.settings.tool_memory_timeout_seconds,
             )
-            logger.debug("PostgreSQL memory recall: %s", items)
+            logger.debug("PostgreSQL memory recall memory: %s", items)
         except (OperationalError, InterfaceError):
             await self.reconnect()
             raise
@@ -192,11 +197,12 @@ class MemoryManager:
             if isinstance(item.value, dict)
         ]
 
+    # 保存记忆点
     async def recall_summary(self, thread_id: str | None) -> str:
         if not thread_id or self.store is None:
             return ""
         try:
-            item = await asyncio.wait_for(
+            item = await asyncio.wait_for( # 等待一个异步任务直到超时或完成
                 self.store.aget(self._summary_namespace(thread_id), "summary"),
                 timeout=self.settings.tool_memory_timeout_seconds,
             )
@@ -206,6 +212,7 @@ class MemoryManager:
         if item is None or not isinstance(item.value, dict):
             return ""
         value = item.value.get("summary")
+        logger.debug("PostgreSQL memory recall summary: %s", value)
         return value if isinstance(value, str) else ""
 
     async def update_summary(
