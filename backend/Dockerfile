@@ -12,11 +12,12 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir uv
 
-COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev
+COPY pyproject.toml uv.lock README.md ./
+RUN uv sync --frozen --no-dev --no-install-project
 
 COPY src ./src
 COPY knowledge.txt ./
+RUN uv sync --frozen --no-dev
 
 FROM base AS runtime
 
@@ -29,6 +30,7 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/src /app/src
 COPY --from=builder /app/knowledge.txt /app/knowledge.txt
+COPY --from=builder /app/README.md /app/README.md
 
 RUN mkdir -p /app/skills \
     && useradd --create-home --uid 10001 appuser \

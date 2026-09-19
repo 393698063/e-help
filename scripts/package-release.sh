@@ -13,24 +13,31 @@ mkdir -p "$OUTPUT_DIR"
 cd "$ROOT_DIR"
 
 echo "Building images for ${PLATFORM}..."
-docker buildx build \
+docker build \
   --platform "$PLATFORM" \
   --pull=false \
+  --provenance=false \
+  --sbom=false \
   --file backend/Dockerfile \
   --tag e-help-backend:release \
-  --load \
   backend
 
-docker buildx build \
+docker build \
   --platform "$PLATFORM" \
   --pull=false \
+  --provenance=false \
+  --sbom=false \
   --file frontend/Dockerfile \
   --tag e-help-frontend:release \
-  --load \
   frontend
 
 echo "Pulling Nginx image for ${PLATFORM}..."
 docker pull --platform "$PLATFORM" nginx:1.27-alpine
+
+docker image inspect \
+  e-help-backend:release \
+  e-help-frontend:release \
+  nginx:1.27-alpine >/dev/null
 
 echo "Exporting images to ${ARCHIVE_PATH}..."
 docker save \

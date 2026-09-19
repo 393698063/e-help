@@ -114,6 +114,10 @@ dist/
 
 ```bash
 ./scripts/package-release.sh
+
+DOCKER_PLATFORM=linux/amd64 \
+RELEASE_VERSION=v1.0.0 \
+./scripts/package-release.sh
 ```
 
 默认按 `linux/amd64` 构建，适合大多数 Linux 服务器。如果服务器是 ARM64：
