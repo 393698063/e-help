@@ -131,3 +131,12 @@ class ReindexResponse(BaseModel):
     status: str
     document_id: str
     chunks_indexed: int
+
+
+class SkillInstallRequest(BaseModel):
+    source: str = Field(min_length=1, max_length=2048)
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class SkillToggleRequest(BaseModel):
+    enabled: bool

@@ -13,6 +13,8 @@ from .query_context import (
     RetrievedContext,
     RewriteResult,
     SafetyResult,
+    SkillInstallRequest,
+    SkillToggleRequest,
     ThreadCreateResponse,
 )
 
@@ -31,5 +33,7 @@ __all__ = [
     "RetrievedContext",
     "RewriteResult",
     "SafetyResult",
+    "SkillInstallRequest",
+    "SkillToggleRequest",
     "ThreadCreateResponse",
 ]

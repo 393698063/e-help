@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 from contextlib import asynccontextmanager
 from contextlib import suppress
 from time import monotonic
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
@@ -15,7 +16,14 @@ from starlette.concurrency import run_in_threadpool
 from .config import get_settings
 from .agent.runtime import AgentRunLimitExceeded
 from .logger import configure_logging, logger
-from .models import ChatRequest, ReindexResponse, ThreadCreateRequest, ThreadCreateResponse
+from .models import (
+    ChatRequest,
+    ReindexResponse,
+    SkillInstallRequest,
+    SkillToggleRequest,
+    ThreadCreateRequest,
+    ThreadCreateResponse,
+)
 from .rag import RAGService
 
 
@@ -85,6 +93,59 @@ async def reindex():
     if rag.index_ready:
         return ReindexResponse(status="ok", document_id="knowledge", chunks_indexed=count)
     return ReindexResponse(status=f"degraded: {rag.index_error}", document_id="knowledge", chunks_indexed=count)
+
+
+@app.get("/api/skills")
+async def list_skills(x_admin_token: str | None = Header(default=None)):
+    _require_skill_admin(x_admin_token)
+    return {"skills": [skill.public_dict() for skill in get_service().skills.list()]}
+
+
+@app.post("/api/skills")
+async def install_skill(
+    payload: SkillInstallRequest,
+    x_admin_token: str | None = Header(default=None),
+):
+    _require_skill_admin(x_admin_token)
+    try:
+        skill = await get_service().skills.install(payload.source, payload.name)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return skill.public_dict()
+
+
+@app.patch("/api/skills/{name}")
+async def toggle_skill(
+    name: str,
+    payload: SkillToggleRequest,
+    x_admin_token: str | None = Header(default=None),
+):
+    _require_skill_admin(x_admin_token)
+    try:
+        skill = get_service().skills.set_enabled(name, payload.enabled)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return skill.public_dict()
+
+
+@app.delete("/api/skills/{name}")
+async def delete_skill(name: str, x_admin_token: str | None = Header(default=None)):
+    _require_skill_admin(x_admin_token)
+    try:
+        get_service().skills.remove(name)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"status": "ok", "name": name}
+
+
+@app.post("/api/skills/reload")
+async def reload_skills(x_admin_token: str | None = Header(default=None)):
+    _require_skill_admin(x_admin_token)
+    try:
+        skills = await get_service().skills.reload()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"skills": [skill.public_dict() for skill in skills]}
 
 
 # SSE 并不是 FastAPI 单独“建立一条特殊连接”的 API。
@@ -209,3 +270,9 @@ def _public_error(exc: Exception) -> str:
     if isinstance(exc, AgentRunLimitExceeded):
         return "当前请求执行步骤过多，请换一种方式描述问题。"
     return "服务处理失败，请稍后重试。"
+
+
+def _require_skill_admin(token: str | None) -> None:
+    configured = get_settings().skill_admin_token
+    if not configured or not token or not hmac.compare_digest(token, configured):
+        raise HTTPException(status_code=401, detail="skill admin authentication required")

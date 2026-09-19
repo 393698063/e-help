@@ -1,0 +1,65 @@
+name: e-help
+
+services:
+  backend:
+    image: e-help-backend:release
+    restart: unless-stopped
+    env_file:
+      - ./backend.env
+    environment:
+      BACKEND_HOST: 0.0.0.0
+      BACKEND_PORT: 8000
+      SKILL_STORAGE_PATH: /app/skills
+    volumes:
+      - e-help-skills:/app/skills
+    expose:
+      - "8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5)"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - e-help
+
+  frontend:
+    image: e-help-frontend:release
+    restart: unless-stopped
+    environment:
+      HOSTNAME: 0.0.0.0
+      PORT: 3000
+      BACKEND_URL: http://backend:8000
+    expose:
+      - "3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - e-help
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+    networks:
+      - e-help
+
+networks:
+  e-help:
+    driver: bridge
+
+volumes:
+  e-help-skills:

@@ -15,11 +15,14 @@ AGENT_SYSTEM_PROMPT = """你是电商客服助手。
 长期记忆只用于表达偏好和上下文个性化，不能当作售后知识库事实。"""
 
 
-def build_agent(model, tools, checkpointer, store):
+def build_agent(model, tools, checkpointer, store, skill_instructions: str = ""):
+    system_prompt = AGENT_SYSTEM_PROMPT
+    if skill_instructions.strip():
+        system_prompt = f"{system_prompt}\n\n{skill_instructions.strip()}"
     return create_agent(
         model=model,
         tools=tools,
-        system_prompt=AGENT_SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         checkpointer=checkpointer,
         store=store,
     )

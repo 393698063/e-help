@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     knowledge_path: Path = Field(
         default_factory=lambda: Path(__file__).resolve().parents[2] / "knowledge.txt"
     )
+    skill_storage_path: Path = Field(
+        default_factory=lambda: Path(__file__).resolve().parents[2] / "skills"
+    )
+    skill_local_roots: str = ""
+    skill_max_bytes: int = 256_000
+    skill_request_timeout_seconds: float = 10.0
+    skill_admin_token: str | None = None
 
     milvus_uri: str = Field(
         default_factory=lambda: "",

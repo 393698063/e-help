@@ -7,6 +7,7 @@ import logging
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from threading import Lock
 from uuid import uuid4
 
@@ -26,6 +27,7 @@ from .models import ChatMessage, IntentResult, QueryContext, RetrievedContext
 from .prompts.answer import SAFETY_BLOCK_MESSAGE, TOOL_UNAVAILABLE_MESSAGE
 from .retrieval import MilvusRetriever
 from .router import route_query
+from .skills import SkillRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +96,18 @@ class RAGService:
         )
         self.answer_chain = AnswerChain(self.chat_model)
         self.memory = MemoryManager(settings, self.chat_model)
+        local_roots = [
+            Path(item.strip())
+            for item in settings.skill_local_roots.split(",")
+            if item.strip()
+        ]
+        self.skills = SkillRegistry(
+            settings.skill_storage_path,
+            local_roots,
+            max_bytes=settings.skill_max_bytes,
+            request_timeout_seconds=settings.skill_request_timeout_seconds,
+        )
+        self.skills.load()
 
         self.store: MilvusStore | None = None
         self.retriever: MilvusRetriever | None = None
@@ -253,6 +267,7 @@ class RAGService:
                 tools=tools,
                 checkpointer=self.memory.checkpointer,
                 store=self.memory.store,
+                skill_instructions=self.skills.enabled_instructions(),
             )
             config = {
                 "recursion_limit": self.settings.agent_recursion_limit, # 递归限制
