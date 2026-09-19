@@ -15,6 +15,7 @@ cd "$ROOT_DIR"
 echo "Building images for ${PLATFORM}..."
 docker buildx build \
   --platform "$PLATFORM" \
+  --pull=false \
   --file backend/Dockerfile \
   --tag e-help-backend:release \
   --load \
@@ -22,6 +23,7 @@ docker buildx build \
 
 docker buildx build \
   --platform "$PLATFORM" \
+  --pull=false \
   --file frontend/Dockerfile \
   --tag e-help-frontend:release \
   --load \

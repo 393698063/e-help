@@ -1,4 +1,6 @@
-FROM python:3.13-slim AS builder
+FROM python:3.13-slim AS base
+
+FROM base AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -16,7 +18,7 @@ RUN uv sync --frozen --no-dev
 COPY src ./src
 COPY knowledge.txt ./
 
-FROM python:3.13-slim AS runtime
+FROM base AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
