@@ -2,6 +2,10 @@
 
 AI 电商助手项目，包含 FastAPI + LangGraph 后端和 Next.js 前端。
 
+## 演示视频
+
+[查看演示视频](docs/test.mov)
+
 ## 本地开发
 
 后端：
