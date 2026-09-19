@@ -14,13 +14,40 @@ type SSEEvent = {
 
 const USER_ID_STORAGE_KEY = "e-help:user-id";
 
+function createId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  const bytes = new Uint8Array(16);
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let index = 0; index < bytes.length; index += 1) {
+      bytes[index] = Math.floor(Math.random() * 256);
+    }
+  }
+
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0"));
+  return [
+    hex.slice(0, 4).join(""),
+    hex.slice(4, 6).join(""),
+    hex.slice(6, 8).join(""),
+    hex.slice(8, 10).join(""),
+    hex.slice(10, 16).join(""),
+  ].join("-");
+}
+
 function getOrCreateUserId(): string {
   if (typeof localStorage === "undefined") return "";
 
   const existing = localStorage.getItem(USER_ID_STORAGE_KEY);
   if (existing) return existing;
 
-  const generated = crypto.randomUUID();
+  const generated = createId();
   localStorage.setItem(USER_ID_STORAGE_KEY, generated);
   return generated;
 }
@@ -58,7 +85,7 @@ export default function ChatApp() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         user_id: userId || null,
-        request_id: crypto.randomUUID(),
+        request_id: createId(),
       }),
     });
     const data = await response.json();
@@ -82,7 +109,7 @@ export default function ChatApp() {
       thread_id: currentThreadId || null,
       user_id: userId || null,
       // 同一个 request_id 重试时，后端可以复用已经完成的结果。
-      request_id: crypto.randomUUID(),
+      request_id: createId(),
       message: text,
     };
 

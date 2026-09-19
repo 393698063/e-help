@@ -62,7 +62,9 @@ curl -X POST http://服务器IP/api/skills \
 如果服务器不接收源码，可以在本地执行：
 
 ```bash
+DOCKER_PLATFORM=linux/amd64 \
+RELEASE_VERSION=v1.0.0 \
 ./scripts/package-release.sh
 ```
 
-然后只把 `dist/` 下的镜像压缩包、Compose 文件、Nginx 配置和环境变量模板上传到服务器。服务器使用 `docker-compose.yml` 运行镜像，不需要安装源码。
+然后只把 `dist/` 下的三个镜像压缩包、Compose 文件、Nginx 配置和环境变量模板上传到服务器。服务器使用 `docker-compose.yml` 运行镜像，不需要安装源码。详细步骤见 [docs/docker-deployment.md](docs/docker-deployment.md)。

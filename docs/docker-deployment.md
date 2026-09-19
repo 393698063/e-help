@@ -110,13 +110,13 @@ dist/
 └── backend.env.example
 ```
 
+下面以服务器地址 `SERVER_IP`、登录用户 `root`、部署目录 `/opt/e-help` 为例，请替换成实际值。
+
 ### 3.1 本地构建发布包
 
 在项目根目录执行：
 
 ```bash
-./scripts/package-release.sh
-
 DOCKER_PLATFORM=linux/amd64 \
 RELEASE_VERSION=v1.0.0 \
 ./scripts/package-release.sh
@@ -134,22 +134,36 @@ DOCKER_PLATFORM=linux/arm64 ./scripts/package-release.sh
 RELEASE_VERSION=v1.0.0 ./scripts/package-release.sh
 ```
 
-脚本会构建后端、前端和 Nginx 镜像，并导出为一个压缩包。注意，本地需要启动 Docker Desktop 或 Docker Engine。
+脚本会构建后端、前端和 Nginx 镜像，并导出为三个压缩包。注意，本地需要启动 Docker Desktop 或 Docker Engine。
 
 ### 3.2 上传发布产物
+
+先创建服务器部署目录：
+
+```bash
+ssh root@SERVER_IP "mkdir -p /opt/e-help"
+```
 
 只上传 `dist/` 里的发布文件，不上传源码：
 
 ```bash
-scp dist/e-help-*.tar.gz user@服务器:/opt/e-help/
-scp dist/docker-compose.yml user@服务器:/opt/e-help/
-scp dist/nginx.conf user@服务器:/opt/e-help/
-scp dist/backend.env.example user@服务器:/opt/e-help/
+scp dist/e-help-*.tar.gz root@SERVER_IP:/opt/e-help/
+scp dist/docker-compose.yml dist/nginx.conf \
+  dist/backend.env.example root@SERVER_IP:/opt/e-help/
+```
+
+如果使用 SSH 私钥：
+
+```bash
+scp -i ~/.ssh/server_key dist/e-help-*.tar.gz root@SERVER_IP:/opt/e-help/
+scp -i ~/.ssh/server_key dist/docker-compose.yml dist/nginx.conf \
+  dist/backend.env.example root@SERVER_IP:/opt/e-help/
 ```
 
 首次部署时，在服务器创建真实环境变量文件：
 
 ```bash
+ssh root@SERVER_IP
 cd /opt/e-help
 cp backend.env.example backend.env
 vi backend.env
@@ -159,6 +173,71 @@ vi backend.env
 
 ### 3.3 服务器导入并启动
 
+确认 Docker 已安装：
+
+```bash
+docker --version
+docker compose version
+```
+
+导入三个镜像：
+
+```bash
+cd /opt/e-help
+for image in e-help-*.tar.gz; do
+  echo "Loading $image"
+  gzip -dc "$image" | docker load
+done
+
+docker image ls | grep -E 'e-help-backend|e-help-frontend|nginx'
+docker compose up -d
+docker compose ps
+curl http://127.0.0.1/api/health
+```
+
+浏览器访问：
+
+```text
+http://SERVER_IP/
+```
+
+服务器上的 Compose 文件没有 `build:` 配置，因此不会读取或要求项目源码。
+
+### 3.4 `backend.env` 配置
+
+至少确认这些配置：
+
+```dotenv
+CLOSE_API_KEY=你的模型服务密钥
+CLOSE_API_BASE_URL=你的模型服务地址
+MILVUS_URI=http://服务器内网IP:19530
+DB_URL=postgresql://用户名:密码@服务器内网IP:5432/数据库名?sslmode=disable
+```
+
+注意：
+
+- 后端运行在容器中，`127.0.0.1` 指向后端容器自身，不是宿主服务器。
+- Milvus 和 PostgreSQL 如果运行在同一台服务器但不在同一个 Compose 网络，使用服务器内网 IP。
+- 如果数据库只监听 `127.0.0.1`，容器可能无法访问，需要调整数据库监听地址或把数据库加入 Docker 网络。
+- 不要把真实的 `backend.env` 提交到 Git。
+
+### 3.5 发布新版本
+
+本地重新打包：
+
+```bash
+RELEASE_VERSION=v1.1.0 ./scripts/package-release.sh
+```
+
+上传新的镜像包和配置：
+
+```bash
+scp dist/e-help-*.tar.gz root@SERVER_IP:/opt/e-help/
+scp dist/docker-compose.yml dist/nginx.conf root@SERVER_IP:/opt/e-help/
+```
+
+服务器上导入并重启：
+
 ```bash
 cd /opt/e-help
 for image in e-help-*.tar.gz; do
@@ -167,31 +246,18 @@ done
 
 docker compose up -d
 docker compose ps
-curl http://127.0.0.1/api/health
 ```
 
-服务器上的 Compose 文件没有 `build:` 配置，因此不会读取或要求项目源码。
+服务器上的 `backend.env` 不会被发布包覆盖。
 
-### 3.4 发布新版本
+### 3.6 回滚
 
-本地重新打包并上传新的 `tar.gz`、`docker-compose.yml` 和 `nginx.conf`：
-
-```bash
-for image in e-help-*.tar.gz; do
-  gzip -dc "$image" | docker load
-done
-
-docker compose up -d
-```
-
-Docker 会使用导入的新镜像重建对应容器。服务器上的 `backend.env` 不会被发布包覆盖。
-
-### 3.5 回滚
-
-保留历史镜像包即可回滚：
+保留历史版本的三个镜像包即可回滚。先导入指定版本：
 
 ```bash
-for image in e-help-*.tar.gz; do
+for image in e-help-backend-v1.0.0.tar.gz \
+            e-help-frontend-v1.0.0.tar.gz \
+            e-help-nginx-v1.0.0.tar.gz; do
   gzip -dc "$image" | docker load
 done
 
