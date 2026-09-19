@@ -102,7 +102,9 @@ curl http://服务器IP/api/health
 
 ```text
 dist/
-├── e-help-images-20260918-120000.tar.gz
+├── e-help-backend-20260918-120000.tar.gz
+├── e-help-frontend-20260918-120000.tar.gz
+├── e-help-nginx-20260918-120000.tar.gz
 ├── docker-compose.yml
 ├── nginx.conf
 └── backend.env.example
@@ -139,7 +141,7 @@ RELEASE_VERSION=v1.0.0 ./scripts/package-release.sh
 只上传 `dist/` 里的发布文件，不上传源码：
 
 ```bash
-scp dist/e-help-images-*.tar.gz user@服务器:/opt/e-help/
+scp dist/e-help-*.tar.gz user@服务器:/opt/e-help/
 scp dist/docker-compose.yml user@服务器:/opt/e-help/
 scp dist/nginx.conf user@服务器:/opt/e-help/
 scp dist/backend.env.example user@服务器:/opt/e-help/
@@ -159,7 +161,10 @@ vi backend.env
 
 ```bash
 cd /opt/e-help
-docker load < e-help-images-20260918-120000.tar.gz
+for image in e-help-*.tar.gz; do
+  gzip -dc "$image" | docker load
+done
+
 docker compose up -d
 docker compose ps
 curl http://127.0.0.1/api/health
@@ -172,7 +177,10 @@ curl http://127.0.0.1/api/health
 本地重新打包并上传新的 `tar.gz`、`docker-compose.yml` 和 `nginx.conf`：
 
 ```bash
-docker load < e-help-images-v1.1.0.tar.gz
+for image in e-help-*.tar.gz; do
+  gzip -dc "$image" | docker load
+done
+
 docker compose up -d
 ```
 
@@ -183,7 +191,10 @@ Docker 会使用导入的新镜像重建对应容器。服务器上的 `backend.
 保留历史镜像包即可回滚：
 
 ```bash
-docker load < e-help-images-v1.0.0.tar.gz
+for image in e-help-*.tar.gz; do
+  gzip -dc "$image" | docker load
+done
+
 docker compose up -d
 ```
 
