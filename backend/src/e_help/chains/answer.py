@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -65,14 +67,33 @@ class AnswerChain:
         long_term_memories: list[dict] | None = None,
     ) -> str:
         return self._rag_chain.invoke(
-            {
-                "conversation_summary": conversation_summary or "暂无摘要。",
-                "recent_messages": self._format_messages(recent_messages or []),
-                "long_term_memory": self._format_memories(long_term_memories or []),
-                "retrieved_context": self._format_retrieved_context(retrieved),
-                "contextualized_query": context["contextualized_query"],
-            }
+            self._rag_payload(
+                context,
+                retrieved,
+                conversation_summary=conversation_summary,
+                recent_messages=recent_messages,
+                long_term_memories=long_term_memories,
+            )
         )
+
+    async def astream_rag(
+        self,
+        context: QueryContext,
+        retrieved: RetrievedContext,
+        *,
+        conversation_summary: str = "",
+        recent_messages: list[ChatMessage] | None = None,
+        long_term_memories: list[dict] | None = None,
+    ) -> AsyncIterator[str]:
+        payload = self._rag_payload(
+            context,
+            retrieved,
+            conversation_summary=conversation_summary,
+            recent_messages=recent_messages,
+            long_term_memories=long_term_memories,
+        )
+        async for chunk in self._rag_chain.astream(payload):
+            yield self._chunk_text(chunk)
 
     def answer_chitchat(
         self,
@@ -83,13 +104,79 @@ class AnswerChain:
         long_term_memories: list[dict] | None = None,
     ) -> str:
         return self._chitchat_chain.invoke(
-            {
-                "query": query,
-                "conversation_summary": conversation_summary or "暂无摘要。",
-                "recent_messages": self._format_messages(recent_messages or []),
-                "long_term_memory": self._format_memories(long_term_memories or []),
-            }
+            self._chitchat_payload(
+                query,
+                conversation_summary=conversation_summary,
+                recent_messages=recent_messages,
+                long_term_memories=long_term_memories,
+            )
         )
+
+    async def astream_chitchat(
+        self,
+        query: str,
+        *,
+        conversation_summary: str = "",
+        recent_messages: list[ChatMessage] | None = None,
+        long_term_memories: list[dict] | None = None,
+    ) -> AsyncIterator[str]:
+        payload = self._chitchat_payload(
+            query,
+            conversation_summary=conversation_summary,
+            recent_messages=recent_messages,
+            long_term_memories=long_term_memories,
+        )
+        async for chunk in self._chitchat_chain.astream(payload):
+            yield self._chunk_text(chunk)
+
+    def _rag_payload(
+        self,
+        context: QueryContext,
+        retrieved: RetrievedContext,
+        *,
+        conversation_summary: str,
+        recent_messages: list[ChatMessage] | None,
+        long_term_memories: list[dict] | None,
+    ) -> dict:
+        return {
+            "conversation_summary": conversation_summary or "暂无摘要。",
+            "recent_messages": self._format_messages(recent_messages or []),
+            "long_term_memory": self._format_memories(long_term_memories or []),
+            "retrieved_context": self._format_retrieved_context(retrieved),
+            "contextualized_query": context["contextualized_query"],
+        }
+
+    def _chitchat_payload(
+        self,
+        query: str,
+        *,
+        conversation_summary: str,
+        recent_messages: list[ChatMessage] | None,
+        long_term_memories: list[dict] | None,
+    ) -> dict:
+        return {
+            "query": query,
+            "conversation_summary": conversation_summary or "暂无摘要。",
+            "recent_messages": self._format_messages(recent_messages or []),
+            "long_term_memory": self._format_memories(long_term_memories or []),
+        }
+
+    @staticmethod
+    def _chunk_text(chunk) -> str:
+        if isinstance(chunk, str):
+            return chunk
+        content = getattr(chunk, "content", "")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for part in content:
+                if isinstance(part, str):
+                    parts.append(part)
+                elif isinstance(part, dict) and part.get("type") == "text":
+                    parts.append(str(part.get("text", "")))
+            return "".join(parts)
+        return ""
 
     #声明为静态方法
     @staticmethod

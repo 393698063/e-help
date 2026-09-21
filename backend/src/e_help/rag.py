@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -11,7 +12,7 @@ from pathlib import Path
 from threading import Lock
 from uuid import uuid4
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 from openai import APIConnectionError
 from pymilvus.exceptions import MilvusException
 from starlette.concurrency import run_in_threadpool
@@ -212,6 +213,7 @@ class RAGService:
         user_id: str | None = None,
         request_id: str | None = None,
         trace: AgentToolTrace | None = None,
+        on_token: Callable[[str], None] | None = None,
     ) -> RAGResult:
         request_id = request_id or str(uuid4())
         thread = self.get_or_create_thread(thread_id, user_id)
@@ -279,9 +281,12 @@ class RAGService:
             }
 
             result = await asyncio.wait_for(
-                agent.ainvoke(
+                self._run_agent_streaming(
+                    agent,
                     {"messages": [{"role": "user", "content": message}]},
-                    config=config,
+                    config,
+                    trace,
+                    on_token,
                 ),
                 timeout=self.settings.agent_timeout_seconds,
             )
@@ -479,6 +484,14 @@ class RAGService:
         )
 
         # 异步任务，执行答案生成逻辑  answer_task（生产者）和 stream_answer 循环（消费者）并发跑，往里放/取不用自己加锁
+        streamed = {"value": False}
+
+        def emit_token(chunk: str) -> None:
+            streamed["value"] = True
+            event_queue.put_nowait(
+                {"event": "message.delta", "data": {"content": chunk}}
+            )
+
         answer_task = asyncio.create_task(
             self.answer(
                 thread.thread_id,
@@ -486,6 +499,7 @@ class RAGService:
                 user_id=user_id,
                 request_id=request_id,
                 trace=trace,
+                on_token=emit_token,
             )
         )
         try:
@@ -550,8 +564,10 @@ class RAGService:
                     "event": "retrieval.completed",
                     "data": result.retrieved_context.model_dump(),
                 }
-            # 最终答案事件
-            yield {"event": "message.delta", "data": {"content": result.answer}}
+            # 兜底：如果模型未能产生 token 级流式（例如代理不支持流式），
+            # 仍通过 message.delta 把最终答案发送一次，保持前端协议一致。
+            if not streamed["value"]:
+                yield {"event": "message.delta", "data": {"content": result.answer}}
             # 最终消息事件
             yield {
                 "event": "message.final",
@@ -695,6 +711,108 @@ class RAGService:
             top_k=min(self.settings.top_k, self.settings.tool_max_retrieval_top_k),
         )
         self.rag_chain = RagChain(self.retriever)
+
+    async def _run_agent_streaming(
+        self,
+        agent,
+        input,
+        config,
+        trace: AgentToolTrace,
+        on_token: Callable[[str], None] | None,
+    ) -> dict:
+        final_state = None
+        streaming_allowed: bool | None = None
+        messages_seen = 0
+        content_chunks_seen = 0
+
+        async for mode, data in agent.astream(
+            input,
+            config=config,
+            stream_mode=["messages", "values"],
+        ):
+            if mode == "messages":
+                message, _metadata = data
+                messages_seen += 1
+                logger.debug(
+                    "agent-stream message: type=%s content=%r tool_calls=%s tool_call_chunks=%s",
+                    type(message).__name__,
+                    str(getattr(message, "content", ""))[:60],
+                    bool(getattr(message, "tool_calls", None)),
+                    bool(getattr(message, "tool_call_chunks", None)),
+                )
+                if not isinstance(message, AIMessageChunk):
+                    continue
+                content = self._chunk_text(message)
+                if content and not self._message_has_tool_calls(message):
+                    content_chunks_seen += 1
+                    if streaming_allowed is None:
+                        streaming_allowed = self._should_stream_agent_answer(trace)
+                        logger.debug(
+                            "agent-stream decision: allowed=%s query_context=%s intent=%s "
+                            "retrieved=%s unavailable=%s",
+                            streaming_allowed,
+                            trace.query_context is not None,
+                            trace.intent is not None,
+                            trace.retrieved_context is not None,
+                            trace.unavailable,
+                        )
+                    if streaming_allowed and on_token is not None:
+                        on_token(content)
+            elif mode == "values":
+                final_state = data
+
+        logger.debug(
+            "agent-stream finished: messages_seen=%s content_chunks_seen=%s final_state=%s",
+            messages_seen,
+            content_chunks_seen,
+            final_state is not None,
+        )
+
+        if final_state is None:
+            snapshot = await agent.aget_state(config)
+            final_state = getattr(snapshot, "values", snapshot)
+
+        return final_state
+
+    def _should_stream_agent_answer(self, trace: AgentToolTrace) -> bool:
+        context = trace.query_context
+        if context is None or trace.intent is None:
+            # 工具链未填充 trace（例如模型未按预期调用 analyze_query，直接回答）时，
+            # 无法提前判断路由；默认允许流式，最终答案仍由 message.final 以正确结果兜底。
+            return True
+        route = self.route_query(context)
+        if route == "chitchat":
+            return True
+        if route != "rag":
+            return False
+        if trace.unavailable:
+            return False
+        if not context.get("need_retrieval"):
+            return False
+        retrieved = trace.retrieved_context
+        return retrieved is not None and bool(retrieved.chunks)
+
+    @staticmethod
+    def _chunk_text(message) -> str:
+        content = getattr(message, "content", "")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for part in content:
+                if isinstance(part, str):
+                    parts.append(part)
+                elif isinstance(part, dict) and part.get("type") == "text":
+                    parts.append(str(part.get("text", "")))
+            return "".join(parts)
+        return ""
+
+    @staticmethod
+    def _message_has_tool_calls(message) -> bool:
+        if getattr(message, "tool_calls", None) or getattr(message, "tool_call_chunks", None):
+            return True
+        additional_kwargs = getattr(message, "additional_kwargs", None) or {}
+        return bool(additional_kwargs.get("tool_calls"))
 
     @staticmethod
     def _extract_answer(agent_result) -> str:

@@ -180,7 +180,8 @@ export default function ChatApp() {
         }
 
         if (parsed.event === "message.delta") {
-          assistantText = String(parsed.data.content ?? assistantText);
+          console.log("qg-message.delta: ", parsed.data.content);
+          assistantText += String(parsed.data.content ?? "");
           setDraftAssistant(assistantText);
         }
 
