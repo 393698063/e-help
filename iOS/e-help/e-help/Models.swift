@@ -1,6 +1,6 @@
 import Foundation
 
-struct ThreadCreateRequest: Encodable {
+nonisolated struct ThreadCreateRequest: Encodable, Sendable {
     let userId: String?
     let requestId: String?
 
@@ -10,7 +10,7 @@ struct ThreadCreateRequest: Encodable {
     }
 }
 
-struct ThreadCreateResponse: Decodable {
+nonisolated struct ThreadCreateResponse: Decodable, Sendable {
     let threadId: String
     let createdAt: String?
 
@@ -20,7 +20,7 @@ struct ThreadCreateResponse: Decodable {
     }
 }
 
-struct ChatRequest: Encodable {
+nonisolated struct ChatRequest: Encodable, Sendable {
     let threadId: String?
     let userId: String?
     let requestId: String?

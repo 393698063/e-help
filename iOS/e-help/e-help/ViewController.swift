@@ -38,6 +38,28 @@ final class ViewController: UIViewController {
 
         updateHeader()
         updateSendButtonState()
+        
+        
+        
+        // Manually register for trait changes
+        let displayScaleTrait: [UITrait] = [UITraitDisplayScale.self]
+        registerForTraitChanges(displayScaleTrait) {
+            (view: UIView, previousTraitCollection: UITraitCollection) in
+//            view.cache.invalidate()
+        }
+    }
+    
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        if traitCollection.horizontalSizeClass == .regular {
+            // 较宽布局：例如双栏
+            print("屏幕较宽\(view.frame)")
+        } else {
+            print("屏幕较窄\(view.frame)")
+            // 较窄布局：例如单栏
+        }
+        
+        print("traitCollection.displayScale\(traitCollection.displayScale)")
     }
 
     deinit {
@@ -245,6 +267,10 @@ final class ViewController: UIViewController {
                 setError(error.localizedDescription)
                 statusLabel.text = "请求失败"
             }
+//            await MainActor.run {
+//                [weak self] in
+//                self?.updateSendButtonState()
+//            }
             isSending = false
             updateSendButtonState()
         }

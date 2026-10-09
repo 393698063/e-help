@@ -6,13 +6,13 @@
 	objectVersion = 77;
 	objects = {
 
-/* Begin PBXFileReference section */
-		E5712E1C30616430009F5EC0 /* e-help.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "e-help.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-/* End PBXFileReference section */
-
 /* Begin PBXBuildFile section */
 		E525CF3930616B9A007F9CCE /* Alamofire in Frameworks */ = {isa = PBXBuildFile; productRef = E525CF3830616B9A007F9CCD /* Alamofire */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		E5712E1C30616430009F5EC0 /* e-help.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "e-help.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
 		E5712E2E30616432009F5EC0 /* Exceptions for "e-help" folder in "e-help" target */ = {
@@ -156,6 +156,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "e-help/Info.plist";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "用于连接本地运行的电商帮帮后端服务。";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UIMainStoryboardFile = Main;
@@ -187,6 +188,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "e-help/Info.plist";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "用于连接本地运行的电商帮帮后端服务。";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UIMainStoryboardFile = Main;
@@ -351,14 +353,6 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCSwiftPackageProductDependency section */
-		E525CF3830616B9A007F9CCD /* Alamofire */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = E525CF3830616B9A007F9CCB /* XCRemoteSwiftPackageReference "Alamofire" */;
-			productName = Alamofire;
-		};
-/* End XCSwiftPackageProductDependency section */
-
 /* Begin XCRemoteSwiftPackageReference section */
 		E525CF3830616B9A007F9CCB /* XCRemoteSwiftPackageReference "Alamofire" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -369,6 +363,14 @@
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		E525CF3830616B9A007F9CCD /* Alamofire */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E525CF3830616B9A007F9CCB /* XCRemoteSwiftPackageReference "Alamofire" */;
+			productName = Alamofire;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = E5712E1430616430009F5EC0 /* Project object */;
 }

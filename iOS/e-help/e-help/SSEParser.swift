@@ -52,3 +52,21 @@ struct SSEParser {
         return [SSEEvent(event: event, data: object)]
     }
 }
+
+/// Serializes access to the mutable parser state from Alamofire's @Sendable stream callback.
+final class LockedSSEParser: @unchecked Sendable {
+    private var parser = SSEParser()
+    private let lock = NSLock()
+
+    func appendLine(_ line: String) -> [SSEEvent] {
+        lock.lock()
+        defer { lock.unlock() }
+        return parser.appendLine(line)
+    }
+
+    func finish() -> [SSEEvent] {
+        lock.lock()
+        defer { lock.unlock() }
+        return parser.finish()
+    }
+}

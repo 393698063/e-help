@@ -42,10 +42,10 @@ final class RAGClient {
                 encoder: JSONParameterEncoder.default
             )
 
-            var parser = SSEParser()
+            let parser = LockedSSEParser()
 
             request.responseStreamString { stream in
-                switch stream {
+                switch stream.event {
                 case .stream(let result):
                     if case .success(let line) = result {
                         for event in parser.appendLine(line) {
