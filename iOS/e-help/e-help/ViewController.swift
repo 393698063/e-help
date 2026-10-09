@@ -85,13 +85,18 @@ final class ViewController: UIViewController {
         threadLabel.textColor = .appTextMuted
         threadLabel.numberOfLines = 1
         threadLabel.lineBreakMode = .byTruncatingMiddle
+        // thread id 很长，让它成为被压缩/截断的一方，而不是把 statusLabel 顶出屏幕。
+        threadLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        threadLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         statusLabel.font = .systemFont(ofSize: 12)
         statusLabel.textColor = .appTextMuted
         statusLabel.textAlignment = .right
         statusLabel.numberOfLines = 1
         statusLabel.text = "准备就绪"
-        statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        // 状态文字优先保证完整显示，不被 threadLabel 挤掉。
+        statusLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        statusLabel.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
 
         headerStack.addArrangedSubview(newThreadButton)
         headerStack.addArrangedSubview(threadLabel)
@@ -322,12 +327,24 @@ final class ViewController: UIViewController {
             if let content = event.data["content"] as? String {
                 let wasEmpty = draftAssistant.isEmpty
                 draftAssistant += content
+                let indexPath = IndexPath(row: messages.count, section: 0)
                 if wasEmpty {
-                    tableView.insertRows(at: [IndexPath(row: messages.count, section: 0)], with: .none)
+                    tableView.insertRows(at: [indexPath], with: .none)
+                } else if let cell = tableView.cellForRow(at: indexPath) as? MessageCell {
+                    // 原地刷新这一格的文字，不走 reloadRows（避免整格重建导致的闪动）。
+                    cell.configure(
+                        with: ChatMessage(role: .assistant, content: draftAssistant),
+                        streaming: true
+                    )
+                    // 只重算行高让气泡随文字增长，关掉动画避免跳动。
+                    UIView.performWithoutAnimation {
+                        tableView.performBatchUpdates(nil)
+                    }
                 } else {
-                    tableView.reloadRows(at: [IndexPath(row: messages.count, section: 0)], with: .none)
+                    // cell 不在可视区的兜底：极少发生，退回整行刷新。
+                    tableView.reloadRows(at: [indexPath], with: .none)
                 }
-                scrollToBottom()
+                scrollToBottom(animated: false)
             }
         case "message.final":
             let final = event.data["content"] as? String ?? draftAssistant
