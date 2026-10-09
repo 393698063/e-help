@@ -47,8 +47,8 @@ final class RAGClient {
             request.responseStreamString { stream in
                 switch stream.event {
                 case .stream(let result):
-                    if case .success(let line) = result {
-                        for event in parser.appendLine(line) {
+                    if case .success(let chunk) = result {
+                        for event in parser.appendChunk(chunk) {
                             continuation.yield(event)
                         }
                     }
