@@ -48,9 +48,12 @@ final class RAGClient {
                 switch stream.event {
                 case .stream(let result):
                     if case .success(let chunk) = result {
+                        print("success\(chunk)")
                         for event in parser.appendChunk(chunk) {
+                            print("\(event)")
                             continuation.yield(event)
                         }
+                        print("-----success-----")
                     }
                 case .complete(let completion):
                     if let error = completion.error {
