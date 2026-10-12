@@ -1,10 +1,12 @@
-# 电商帮帮
+# e-help
 
-AI 电商助手项目，包含 FastAPI + LangGraph 后端和 Next.js 前端。
+AI 咨询助手项目，包含 FastAPI + LangGraph 后端和 Next.js 前端。
 
 ## 演示视频
+| H5 演示| iOS 演示|
+| --- | --- |
+| ![H5演示](docs/test.gif)| ![iOS 演示](docs/iOS.gif)|
 
-![演示动图](docs/test.gif)
 
 ## 项目流程图
 
